@@ -1,0 +1,87 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "mizchi/rkyv"
+
+import {
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn default_format() -> Format
+
+pub fn encode_string(String) -> Bytes
+
+pub fn encode_vec_u32(Array[UInt]) -> Bytes
+
+// Errors
+
+// Types and methods
+pub enum Endian {
+  Little
+  Big
+} derive(Eq, @debug.Debug)
+
+pub struct Format {
+  endian : Endian
+  pointer_width : Int
+  aligned : Bool
+} derive(Eq, @debug.Debug)
+pub fn Format::big_endian(Int, Bool) -> Self
+pub fn Format::new(Endian, Int, Bool) -> Self
+pub fn Format::pointer_bytes(Self) -> Result[Int, RkyvError]
+
+pub struct Reader {
+  bytes : Bytes
+  format : Format
+}
+pub fn Reader::bytes(Self) -> Bytes
+pub fn Reader::new(Bytes) -> Self
+pub fn Reader::read_bool(Self, Int) -> Result[Bool, RkyvError]
+pub fn Reader::read_f32(Self, Int) -> Result[Float, RkyvError]
+pub fn Reader::read_f64(Self, Int) -> Result[Double, RkyvError]
+pub fn Reader::read_i16(Self, Int) -> Result[Int, RkyvError]
+pub fn Reader::read_i32(Self, Int) -> Result[Int, RkyvError]
+pub fn Reader::read_i64(Self, Int) -> Result[Int64, RkyvError]
+pub fn Reader::read_i8(Self, Int) -> Result[Int, RkyvError]
+pub fn Reader::read_option_value_offset(Self, Int, Int) -> Result[Int?, RkyvError]
+pub fn Reader::read_rel_ptr(Self, Int) -> Result[Int, RkyvError]
+pub fn Reader::read_rel_ptr_offset(Self, Int) -> Result[Int, RkyvError]
+pub fn Reader::read_string(Self, Int) -> Result[String, RkyvError]
+pub fn Reader::read_u16(Self, Int) -> Result[UInt, RkyvError]
+pub fn Reader::read_u32(Self, Int) -> Result[UInt, RkyvError]
+pub fn Reader::read_u64(Self, Int) -> Result[UInt64, RkyvError]
+pub fn Reader::read_u8(Self, Int) -> Result[Byte, RkyvError]
+pub fn Reader::read_usize(Self, Int) -> Result[Int, RkyvError]
+pub fn Reader::read_vec_header(Self, Int) -> Result[VecHeader, RkyvError]
+pub fn Reader::read_vec_u32(Self, Int) -> Result[U32VecView, RkyvError]
+pub fn Reader::root_offset(Self, Int) -> Result[Int, RkyvError]
+pub fn Reader::with_format(Bytes, Format) -> Self
+
+pub enum RkyvError {
+  OutOfBounds(offset~ : Int, size~ : Int, length~ : Int)
+  InvalidPointerWidth(Int)
+  InvalidAlignment(Int)
+  InvalidRelativePointer(Int)
+  LengthOverflow(Int)
+  InvalidCollectionLength(Int)
+  InvalidUtf8
+} derive(Eq, @debug.Debug)
+
+pub struct U32VecView {
+  reader : Reader
+  data_offset : Int
+  length : Int
+}
+pub fn U32VecView::at(Self, Int) -> Result[UInt?, RkyvError]
+pub fn U32VecView::data_byte_offset(Self) -> Int
+pub fn U32VecView::length(Self) -> Int
+pub fn U32VecView::to_array(Self) -> Result[Array[UInt], RkyvError]
+
+pub struct VecHeader {
+  data_offset : Int
+  length : Int
+} derive(Eq, @debug.Debug)
+
+// Type aliases
+
+// Traits
+
