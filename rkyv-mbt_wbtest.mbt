@@ -29,6 +29,7 @@ test "default Vec<u32> header helper validates the complete element span" {
   )
   match truncated.read_default_vec_u32_header(0) {
     Ok(_) => fail("truncated default Vec<u32> header was accepted")
-    Err(_) => ()
+    Err(RkyvError::InvalidCollectionLength(length)) => assert_eq(length, 3)
+    Err(_) => fail("truncated default Vec<u32> returned the wrong error")
   }
 }

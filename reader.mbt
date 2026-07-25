@@ -148,21 +148,6 @@ fn Reader::read_u32_in_validated_range(self : Reader, offset : Int) -> UInt {
 }
 
 ///|
-/// Decodes a little-endian `u32` after the caller has established that its
-/// bytes are in range. The default rkyv profile uses this in its fixed-width
-/// `ArchivedVec<u32>` header path.
-fn Reader::read_u32_little_in_validated_range(
-  self : Reader,
-  offset : Int,
-) -> UInt {
-  let b0 = self.bytes.unsafe_get(offset).to_uint()
-  let b1 = self.bytes.unsafe_get(offset + 1).to_uint()
-  let b2 = self.bytes.unsafe_get(offset + 2).to_uint()
-  let b3 = self.bytes.unsafe_get(offset + 3).to_uint()
-  b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
-}
-
-///|
 /// Reads an unsigned 32-bit integer using the archive's configured endianness.
 pub fn Reader::read_u32(self : Reader, offset : Int) -> Result[UInt, RkyvError] {
   match self.require(offset, 4) {
@@ -381,34 +366,33 @@ pub fn Reader::read_vec_header(
 /// default profile is little-endian with 32-bit relative pointers and lengths,
 /// so its header is always eight bytes. This avoids repeated format dispatch
 /// and per-field bounds checks in the lazy hot path.
+#warnings("-alert_experimental")
 fn Reader::read_default_vec_u32_header(
   self : Reader,
   offset : Int,
 ) -> Result[VecHeader, RkyvError] {
-  match self.require(offset, 8) {
-    Err(error) => Err(error)
-    Ok(_) => {
-      let relative = self
-        .read_u32_little_in_validated_range(offset)
-        .reinterpret_as_int()
-      let raw_length = self.read_u32_little_in_validated_range(offset + 4)
-      if raw_length > 0x7fff_ffffU {
-        return Err(RkyvError::LengthOverflow(raw_length.reinterpret_as_int()))
-      }
-      let length = raw_length.reinterpret_as_int()
-      let data_offset = offset + relative
-      match self.require(data_offset, 0) {
-        Err(_) => Err(RkyvError::InvalidRelativePointer(relative))
-        Ok(_) => {
-          let available = self.bytes.length() - data_offset
-          if length > available / 4 {
-            Err(RkyvError::InvalidCollectionLength(length))
-          } else {
-            Ok({ data_offset, length })
-          }
-        }
-      }
-    }
+  let input_length = self.bytes.length()
+  if offset < 0 || offset > input_length - 8 {
+    let size = 8
+    let length = input_length
+    return Err(RkyvError::OutOfBounds(offset~, size~, length~))
+  }
+  let header = @v128.v128_load64_zero(bytes_as_fixed_array(self.bytes), offset)
+  let relative = @v128.i32x4_extract_lane(header, 0).reinterpret_as_int()
+  let raw_length = @v128.i32x4_extract_lane(header, 1)
+  if raw_length > 0x7fff_ffffU {
+    return Err(RkyvError::LengthOverflow(raw_length.reinterpret_as_int()))
+  }
+  let length = raw_length.reinterpret_as_int()
+  let data_offset = offset + relative
+  if data_offset < 0 || data_offset > input_length {
+    return Err(RkyvError::InvalidRelativePointer(relative))
+  }
+  let available = input_length - data_offset
+  if length > available / 4 {
+    Err(RkyvError::InvalidCollectionLength(length))
+  } else {
+    Ok({ data_offset, length })
   }
 }
 

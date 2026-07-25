@@ -59,6 +59,10 @@ Rust rkyv との native 比較は `just bench-compare` で実行できます。M
 API）を用います。なお、これは言語ランタイム・配列実装・コンパイラ最適化を含む end-to-end 比較であり、
 wasm-gc/JS target の MoonBit 性能や同一 ABI での純粋なアルゴリズム比較を表すものではありません。
 
+現在の Moon CLI には `moon bench --profile` はありません。`just bench-profile` は代わりに
+Reader 生成・Vec header/span 検証・検証済み view の `get` を個別に計測します。通常の利用では
+`read_vec_u32` の結果を保持し、複数の要素を `get` で読むと header 検証コストを一度にできます。
+
 `Reader::read_vec_u32` が返す `U32VecView` は生成時に全要素の byte span を検証済みです。
 そのため `view.get(index) -> UInt?` は有効な index の追加範囲検証なしに値を読みます。既存の
 `view.at(index) -> Result[UInt?, RkyvError]` と `view.to_array()` もこの fast path を内部利用し、
