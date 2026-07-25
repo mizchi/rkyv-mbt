@@ -11,7 +11,7 @@
 
 name = "mizchi/rkyv"
 
-version = "0.1.0"
+version = "0.2.0"
 
 readme = "README.mbt.md"
 
@@ -19,7 +19,7 @@ repository = "https://github.com/mizchi/rkyv-mbt"
 
 license = "Apache-2.0"
 
-keywords = ["rkyv", "serialization", "archive", "interoperability"]
+keywords = [ "rkyv", "serialization", "archive", "interoperability" ]
 
 preferred_target = "wasm-gc"
 

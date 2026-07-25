@@ -1,0 +1,9 @@
+[package]
+name = "rkyv-mbt-codegen"
+version = "0.2.0"
+edition = "2024"
+publish = false
+
+[dev-dependencies]
+rkyv = "=0.8.17"
+rkyv-mbt-derive = { path = "../rkyv-mbt-derive" }

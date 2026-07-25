@@ -24,6 +24,7 @@ pub enum RkyvError {
   InvalidRelativePointer(Int)
   LengthOverflow(Int)
   InvalidCollectionLength(Int)
+  InvalidElementSize(Int)
   InvalidUtf8
 } derive(Debug, Eq)
 

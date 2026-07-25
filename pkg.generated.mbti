@@ -52,8 +52,10 @@ pub fn Reader::read_u64(Self, Int) -> Result[UInt64, RkyvError]
 pub fn Reader::read_u8(Self, Int) -> Result[Byte, RkyvError]
 pub fn Reader::read_usize(Self, Int) -> Result[Int, RkyvError]
 pub fn Reader::read_vec_header(Self, Int) -> Result[VecHeader, RkyvError]
+pub fn Reader::read_vec_header_with_element_size(Self, Int, Int) -> Result[VecHeader, RkyvError]
 pub fn Reader::read_vec_u32(Self, Int) -> Result[U32VecView, RkyvError]
 pub fn Reader::root_offset(Self, Int) -> Result[Int, RkyvError]
+pub fn Reader::validate_range(Self, Int, Int) -> Result[Unit, RkyvError]
 pub fn Reader::with_format(Bytes, Format) -> Self
 
 pub enum RkyvError {
@@ -63,6 +65,7 @@ pub enum RkyvError {
   InvalidRelativePointer(Int)
   LengthOverflow(Int)
   InvalidCollectionLength(Int)
+  InvalidElementSize(Int)
   InvalidUtf8
 } derive(Eq, @debug.Debug)
 
@@ -73,8 +76,10 @@ pub struct U32VecView {
 }
 pub fn U32VecView::at(Self, Int) -> Result[UInt?, RkyvError]
 pub fn U32VecView::data_byte_offset(Self) -> Int
+pub fn U32VecView::get(Self, Int) -> UInt?
 pub fn U32VecView::length(Self) -> Int
 pub fn U32VecView::to_array(Self) -> Result[Array[UInt], RkyvError]
+pub fn U32VecView::to_array_fast(Self) -> Array[UInt]
 
 pub struct VecHeader {
   data_offset : Int

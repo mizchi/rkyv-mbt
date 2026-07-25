@@ -10,8 +10,9 @@ fn benchmark_vec_archive(element_count : Int) -> Bytes {
 
 ///|
 /// Resolves one selected element from a 4,096-element archive. The measured
-/// section includes `Reader`/view construction but creates no element array.
-test "ArchivedVec<u32> lazy selected element / 4K" (b : @bench.T) {
+/// section includes safe `Reader`/view construction, then uses the validated
+/// view's non-failing `get` fast path without allocating an element array.
+test "ArchivedVec<u32> validated selected element / 4K" (b : @bench.T) {
   let element_count = 4096
   let archive = benchmark_vec_archive(element_count)
   let root_offset = element_count * 4
@@ -19,7 +20,7 @@ test "ArchivedVec<u32> lazy selected element / 4K" (b : @bench.T) {
     let reader = Reader::new(archive)
     let selected : Result[UInt?, RkyvError] = match
       reader.read_vec_u32(root_offset) {
-      Ok(view) => view.at(element_count / 2)
+      Ok(view) => Ok(view.get(element_count / 2))
       Err(error) => Err(error)
     }
     b.keep(selected)
@@ -27,9 +28,9 @@ test "ArchivedVec<u32> lazy selected element / 4K" (b : @bench.T) {
 }
 
 ///|
-/// Materializes the same 4,096-element archive into a MoonBit array. This is
-/// the eager baseline for callers that need every element.
-test "ArchivedVec<u32> eager materialization / 4K" (b : @bench.T) {
+/// Materializes the same 4,096-element archive into a MoonBit array. The
+/// default little-endian path loads four `u32` values per v128 block.
+test "ArchivedVec<u32> SIMD eager materialization / 4K" (b : @bench.T) {
   let element_count = 4096
   let archive = benchmark_vec_archive(element_count)
   let root_offset = element_count * 4

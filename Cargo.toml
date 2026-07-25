@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = [
+  "codegen/rust/rkyv-mbt-codegen",
+  "codegen/rust/rkyv-mbt-derive",
+]
+exclude = ["conformance/rust"]

@@ -6,3 +6,10 @@ publish = false
 
 [dependencies]
 rkyv = "=0.8.17"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "reader"
+harness = false

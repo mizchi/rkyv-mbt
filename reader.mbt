@@ -23,6 +23,12 @@ pub struct U32VecView {
 }
 
 ///|
+/// `Bytes` and `FixedArray[Byte]` have the same immutable backing layout.
+/// This private identity view is used only as the read-only source for the
+/// experimental SIMD materializer below.
+fn bytes_as_fixed_array(bytes : Bytes) -> FixedArray[Byte] = "%identity"
+
+///|
 /// Creates a reader for rkyv's default format.
 pub fn Reader::new(bytes : Bytes) -> Reader {
   { bytes, format: default_format() }
@@ -53,6 +59,17 @@ fn Reader::require(
   } else {
     Ok(())
   }
+}
+
+///|
+/// Validates that a fixed-size archived value is wholly contained in the
+/// input. Generated nested views use this before retaining an inline offset.
+pub fn Reader::validate_range(
+  self : Reader,
+  offset : Int,
+  size : Int,
+) -> Result[Unit, RkyvError] {
+  self.require(offset, size)
 }
 
 ///|
@@ -116,21 +133,41 @@ pub fn Reader::read_i16(self : Reader, offset : Int) -> Result[Int, RkyvError] {
 }
 
 ///|
+/// Decodes a `u32` after the caller has established that all four bytes are
+/// in range. `U32VecView` may use this because its constructor validates the
+/// complete archived element span before retaining the view.
+fn Reader::read_u32_in_validated_range(self : Reader, offset : Int) -> UInt {
+  let b0 = self.bytes.unsafe_get(offset).to_uint()
+  let b1 = self.bytes.unsafe_get(offset + 1).to_uint()
+  let b2 = self.bytes.unsafe_get(offset + 2).to_uint()
+  let b3 = self.bytes.unsafe_get(offset + 3).to_uint()
+  match self.format.endian {
+    Endian::Little => b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+    Endian::Big => (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
+  }
+}
+
+///|
+/// Decodes a little-endian `u32` after the caller has established that its
+/// bytes are in range. The default rkyv profile uses this in its fixed-width
+/// `ArchivedVec<u32>` header path.
+fn Reader::read_u32_little_in_validated_range(
+  self : Reader,
+  offset : Int,
+) -> UInt {
+  let b0 = self.bytes.unsafe_get(offset).to_uint()
+  let b1 = self.bytes.unsafe_get(offset + 1).to_uint()
+  let b2 = self.bytes.unsafe_get(offset + 2).to_uint()
+  let b3 = self.bytes.unsafe_get(offset + 3).to_uint()
+  b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+}
+
+///|
 /// Reads an unsigned 32-bit integer using the archive's configured endianness.
 pub fn Reader::read_u32(self : Reader, offset : Int) -> Result[UInt, RkyvError] {
   match self.require(offset, 4) {
     Err(error) => Err(error)
-    Ok(_) => {
-      let b0 = self.bytes[offset].to_uint()
-      let b1 = self.bytes[offset + 1].to_uint()
-      let b2 = self.bytes[offset + 2].to_uint()
-      let b3 = self.bytes[offset + 3].to_uint()
-      let value = match self.format.endian {
-        Endian::Little => b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
-        Endian::Big => (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
-      }
-      Ok(value)
-    }
+    Ok(_) => Ok(self.read_u32_in_validated_range(offset))
   }
 }
 
@@ -340,6 +377,67 @@ pub fn Reader::read_vec_header(
 }
 
 ///|
+/// Reads and validates a default-format `ArchivedVec<u32>` header. The rkyv
+/// default profile is little-endian with 32-bit relative pointers and lengths,
+/// so its header is always eight bytes. This avoids repeated format dispatch
+/// and per-field bounds checks in the lazy hot path.
+fn Reader::read_default_vec_u32_header(
+  self : Reader,
+  offset : Int,
+) -> Result[VecHeader, RkyvError] {
+  match self.require(offset, 8) {
+    Err(error) => Err(error)
+    Ok(_) => {
+      let relative = self
+        .read_u32_little_in_validated_range(offset)
+        .reinterpret_as_int()
+      let raw_length = self.read_u32_little_in_validated_range(offset + 4)
+      if raw_length > 0x7fff_ffffU {
+        return Err(RkyvError::LengthOverflow(raw_length.reinterpret_as_int()))
+      }
+      let length = raw_length.reinterpret_as_int()
+      let data_offset = offset + relative
+      match self.require(data_offset, 0) {
+        Err(_) => Err(RkyvError::InvalidRelativePointer(relative))
+        Ok(_) => {
+          let available = self.bytes.length() - data_offset
+          if length > available / 4 {
+            Err(RkyvError::InvalidCollectionLength(length))
+          } else {
+            Ok({ data_offset, length })
+          }
+        }
+      }
+    }
+  }
+}
+
+///|
+/// Reads an `ArchivedVec<T>` header and validates its complete element range.
+/// Generated bindings supply the archived element size measured by the Rust
+/// compiler, preventing a corrupted length from escaping as a lazy view.
+pub fn Reader::read_vec_header_with_element_size(
+  self : Reader,
+  offset : Int,
+  element_size : Int,
+) -> Result[VecHeader, RkyvError] {
+  if element_size <= 0 {
+    return Err(RkyvError::InvalidElementSize(element_size))
+  }
+  match self.read_vec_header(offset) {
+    Err(error) => Err(error)
+    Ok(header) => {
+      let available = self.bytes.length() - header.data_offset
+      if header.length > available / element_size {
+        Err(RkyvError::InvalidCollectionLength(header.length))
+      } else {
+        Ok(header)
+      }
+    }
+  }
+}
+
+///|
 /// Reads an `ArchivedVec<u32>` as a zero-copy typed view. The whole byte span
 /// is validated before returning so subsequent indexing is bounded by the
 /// archive rather than a potentially corrupted archived length.
@@ -347,20 +445,20 @@ pub fn Reader::read_vec_u32(
   self : Reader,
   offset : Int,
 ) -> Result[U32VecView, RkyvError] {
-  match self.read_vec_header(offset) {
+  let header = if self.format.endian == Endian::Little &&
+    self.format.pointer_width == 32 {
+    self.read_default_vec_u32_header(offset)
+  } else {
+    self.read_vec_header_with_element_size(offset, 4)
+  }
+  match header {
     Err(error) => Err(error)
-    Ok(header) => {
-      let available = self.bytes.length() - header.data_offset
-      if header.length > available / 4 {
-        Err(RkyvError::InvalidCollectionLength(header.length))
-      } else {
-        Ok({
-          reader: self,
-          data_offset: header.data_offset,
-          length: header.length,
-        })
-      }
-    }
+    Ok(header) =>
+      Ok({
+        reader: self,
+        data_offset: header.data_offset,
+        length: header.length,
+      })
   }
 }
 
@@ -379,20 +477,63 @@ pub fn U32VecView::data_byte_offset(self : U32VecView) -> Int {
 }
 
 ///|
+/// Resolves an element from a fully validated archived vector. `read_vec_u32`
+/// verifies the complete element span before constructing this view, so a
+/// valid in-range index cannot fail byte-range validation. Out-of-range indices
+/// return `None`.
+pub fn U32VecView::get(self : U32VecView, index : Int) -> UInt? {
+  if index < 0 || index >= self.length {
+    None
+  } else {
+    Some(self.reader.read_u32_in_validated_range(self.data_offset + index * 4))
+  }
+}
+
+///|
 /// Resolves one element without copying the rest of the archived vector.
 /// An index outside the vector's logical range returns `Ok(None)`.
 pub fn U32VecView::at(
   self : U32VecView,
   index : Int,
 ) -> Result[UInt?, RkyvError] {
-  if index < 0 || index >= self.length {
-    Ok(None)
-  } else {
-    match self.reader.read_u32(self.data_offset + index * 4) {
-      Ok(value) => Ok(Some(value))
-      Err(error) => Err(error)
+  Ok(self.get(index))
+}
+
+///|
+/// Decodes every element after `read_vec_u32` has validated the full element
+/// span. Unlike the compatibility wrapper, this cannot fail.
+#warnings("-alert_experimental")
+pub fn U32VecView::to_array_fast(self : U32VecView) -> Array[UInt] {
+  let values : Array[UInt] = Array::make(self.length, 0U)
+  match self.reader.format.endian {
+    Endian::Little => {
+      let bytes = bytes_as_fixed_array(self.reader.bytes)
+      let block_count = self.length / 4
+      for block in 0..<block_count {
+        let index = block * 4
+        let lanes = @v128.v128_load(bytes, self.data_offset + index * 4)
+        values.unsafe_set(index, @v128.i32x4_extract_lane(lanes, 0))
+        values.unsafe_set(index + 1, @v128.i32x4_extract_lane(lanes, 1))
+        values.unsafe_set(index + 2, @v128.i32x4_extract_lane(lanes, 2))
+        values.unsafe_set(index + 3, @v128.i32x4_extract_lane(lanes, 3))
+      }
+      let tail_start = block_count * 4
+      for index in tail_start..<self.length {
+        values.unsafe_set(
+          index,
+          self.reader.read_u32_in_validated_range(self.data_offset + index * 4),
+        )
+      }
     }
+    Endian::Big =>
+      for index in 0..<self.length {
+        values.unsafe_set(
+          index,
+          self.reader.read_u32_in_validated_range(self.data_offset + index * 4),
+        )
+      }
   }
+  values
 }
 
 ///|
@@ -402,14 +543,7 @@ pub fn U32VecView::at(
 pub fn U32VecView::to_array(
   self : U32VecView,
 ) -> Result[Array[UInt], RkyvError] {
-  let values : Array[UInt] = Array::make(self.length, 0U)
-  for index in 0..<self.length {
-    match self.reader.read_u32(self.data_offset + index * 4) {
-      Ok(value) => values[index] = value
-      Err(error) => return Err(error)
-    }
-  }
-  Ok(values)
+  Ok(self.to_array_fast())
 }
 
 ///|

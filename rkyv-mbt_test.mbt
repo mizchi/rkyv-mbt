@@ -66,6 +66,31 @@ test "resolves an rkyv relative pointer in a Vec header" {
 }
 
 ///|
+/// Generic generated views must validate the whole element span before they
+/// retain a data offset. This header points at 12 available bytes, not three
+/// 8-byte archived elements.
+test "validates an ArchivedVec element span for generated views" {
+  let reader = @rkyv.Reader::new(
+    Bytes::from_array([
+      b'\x01', b'\x00', b'\x00', b'\x00', b'\x02', b'\x00', b'\x00', b'\x00', b'\x03',
+      b'\x00', b'\x00', b'\x00', b'\xf4', b'\xff', b'\xff', b'\xff', b'\x03', b'\x00',
+      b'\x00', b'\x00',
+    ]),
+  )
+  match reader.read_vec_header_with_element_size(12, 4) {
+    Err(_) => fail("valid 4-byte element span was rejected")
+    Ok(header) => {
+      assert_eq(header.data_offset, 0)
+      assert_eq(header.length, 3)
+    }
+  }
+  match reader.read_vec_header_with_element_size(12, 8) {
+    Ok(_) => fail("truncated 8-byte element span was accepted")
+    Err(_) => ()
+  }
+}
+
+///|
 /// A typed view keeps the archive in place. This is the fast path used by
 /// generated bindings that only need a small subset of a large collection.
 test "reads an ArchivedVec<u32> lazily and materializes on demand" {
@@ -81,10 +106,58 @@ test "reads an ArchivedVec<u32> lazily and materializes on demand" {
     Ok(view) => {
       assert_eq(view.data_byte_offset(), 0)
       assert_eq(view.length(), 3)
+      assert_eq(view.get(0), Some(1U))
+      assert_eq(view.get(2), Some(3U))
+      assert_eq(view.get(3), None)
       assert_eq(view.at(0), Ok(Some(1U)))
       assert_eq(view.at(2), Ok(Some(3U)))
       assert_eq(view.at(3), Ok(None))
+      assert_eq(view.to_array_fast(), [1U, 2U, 3U])
       assert_eq(view.to_array(), Ok([1U, 2U, 3U]))
+    }
+  }
+}
+
+///|
+/// The validated view fast path must preserve the reader's selected endian
+/// format while avoiding a second range check for every element.
+test "reads a validated ArchivedVec<u32> with big-endian elements" {
+  let reader = @rkyv.Reader::with_format(
+    Bytes::from_array([
+      b'\x12', b'\x34', b'\x56', b'\x78', b'\xff', b'\xff', b'\xff', b'\xfc', b'\x00',
+      b'\x00', b'\x00', b'\x01',
+    ]),
+    @rkyv.Format::big_endian(32, true),
+  )
+  match reader.read_vec_u32(4) {
+    Err(_) => fail("valid big-endian Vec<u32> was rejected")
+    Ok(view) => {
+      assert_eq(view.get(0), Some(0x12345678U))
+      assert_eq(view.get(1), None)
+      assert_eq(view.at(0), Ok(Some(0x12345678U)))
+      assert_eq(view.to_array_fast(), [0x12345678U])
+      assert_eq(view.to_array(), Ok([0x12345678U]))
+    }
+  }
+}
+
+///|
+/// The SIMD materializer reads four little-endian `u32` values per 128-bit
+/// block and finishes a non-multiple-of-four tail with the scalar fast path.
+test "materializes an ArchivedVec<u32> with SIMD blocks and a tail" {
+  let reader = @rkyv.Reader::new(
+    Bytes::from_array([
+      b'\x01', b'\x00', b'\x00', b'\x00', b'\x02', b'\x00', b'\x00', b'\x00', b'\x03',
+      b'\x00', b'\x00', b'\x00', b'\x04', b'\x00', b'\x00', b'\x00', b'\x05', b'\x00',
+      b'\x00', b'\x00', b'\xec', b'\xff', b'\xff', b'\xff', b'\x05', b'\x00', b'\x00',
+      b'\x00',
+    ]),
+  )
+  match reader.read_vec_u32(20) {
+    Err(_) => fail("valid five-element Vec<u32> was rejected")
+    Ok(view) => {
+      assert_eq(view.to_array_fast(), [1U, 2U, 3U, 4U, 5U])
+      assert_eq(view.to_array(), Ok([1U, 2U, 3U, 4U, 5U]))
     }
   }
 }

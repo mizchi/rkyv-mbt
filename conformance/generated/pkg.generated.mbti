@@ -1,0 +1,70 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "mizchi/rkyv/conformance/generated"
+
+import {
+  "mizchi/rkyv",
+}
+
+// Values
+
+// Errors
+
+// Types and methods
+pub struct AccountView {
+  reader : @rkyv.Reader
+  offset : Int
+}
+pub fn AccountView::at(@rkyv.Reader, Int) -> Result[Self, @rkyv.RkyvError]
+pub fn AccountView::id(Self) -> Result[UInt, @rkyv.RkyvError]
+pub fn AccountView::profile(Self) -> Result[ProfileView, @rkyv.RkyvError]
+pub fn AccountView::root(Bytes) -> Result[Self, @rkyv.RkyvError]
+
+pub struct DirectoryEntriesView {
+  reader : @rkyv.Reader
+  data_offset : Int
+  length : Int
+}
+pub fn DirectoryEntriesView::at(Self, Int) -> Result[ProfileView?, @rkyv.RkyvError]
+pub fn DirectoryEntriesView::length(Self) -> Int
+
+pub struct DirectoryView {
+  reader : @rkyv.Reader
+  offset : Int
+}
+pub fn DirectoryView::at(@rkyv.Reader, Int) -> Result[Self, @rkyv.RkyvError]
+pub fn DirectoryView::entries(Self) -> Result[DirectoryEntriesView, @rkyv.RkyvError]
+pub fn DirectoryView::root(Bytes) -> Result[Self, @rkyv.RkyvError]
+
+pub struct PreferencesView {
+  reader : @rkyv.Reader
+  offset : Int
+}
+pub fn PreferencesView::at(@rkyv.Reader, Int) -> Result[Self, @rkyv.RkyvError]
+pub fn PreferencesView::nickname(Self) -> Result[String?, @rkyv.RkyvError]
+pub fn PreferencesView::profile(Self) -> Result[ProfileView?, @rkyv.RkyvError]
+pub fn PreferencesView::retries(Self) -> Result[UInt?, @rkyv.RkyvError]
+pub fn PreferencesView::root(Bytes) -> Result[Self, @rkyv.RkyvError]
+
+pub struct ProfileView {
+  reader : @rkyv.Reader
+  offset : Int
+}
+pub fn ProfileView::age(Self) -> Result[UInt, @rkyv.RkyvError]
+pub fn ProfileView::at(@rkyv.Reader, Int) -> Result[Self, @rkyv.RkyvError]
+pub fn ProfileView::root(Bytes) -> Result[Self, @rkyv.RkyvError]
+pub fn ProfileView::subscribed(Self) -> Result[Bool, @rkyv.RkyvError]
+
+pub struct UserView {
+  reader : @rkyv.Reader
+  offset : Int
+}
+pub fn UserView::active(Self) -> Result[Bool, @rkyv.RkyvError]
+pub fn UserView::at(@rkyv.Reader, Int) -> Result[Self, @rkyv.RkyvError]
+pub fn UserView::id(Self) -> Result[UInt, @rkyv.RkyvError]
+pub fn UserView::name(Self) -> Result[String, @rkyv.RkyvError]
+pub fn UserView::root(Bytes) -> Result[Self, @rkyv.RkyvError]
+pub fn UserView::scores(Self) -> Result[@rkyv.U32VecView, @rkyv.RkyvError]
+
+// Type aliases
+
+// Traits
