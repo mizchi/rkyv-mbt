@@ -3,3 +3,7 @@ import {
   "moonbitlang/core/encoding/utf8",
   "moonbitlang/core/v128",
 }
+
+options(
+  "native-stub": [ "reader_native.c" ],
+)

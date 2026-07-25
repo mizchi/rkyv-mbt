@@ -1,0 +1,5 @@
+import {
+  "mizchi/rkyv",
+}
+
+pkgtype(kind: "executable")

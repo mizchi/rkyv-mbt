@@ -29,6 +29,20 @@ pub struct U32VecView {
 fn bytes_as_fixed_array(bytes : Bytes) -> FixedArray[Byte] = "%identity"
 
 ///|
+/// Native `UInt` elements occupy four bytes, matching rkyv's archived `u32`.
+/// The native stub bulk-copies an already validated little-endian span into a
+/// temporary `FixedArray[UInt]`; no alias between differently typed arrays is
+/// exposed to MoonBit's ownership system.
+#cfg(target="native")
+#borrow(source, destination)
+extern "C" fn copy_validated_u32s_native(
+  source : FixedArray[Byte],
+  source_offset : Int,
+  destination : FixedArray[UInt],
+  length : Int,
+) -> Unit = "rkyv_copy_validated_u32s"
+
+///|
 /// Creates a reader for rkyv's default format.
 pub fn Reader::new(bytes : Bytes) -> Reader {
   { bytes, format: default_format() }
@@ -362,15 +376,16 @@ pub fn Reader::read_vec_header(
 }
 
 ///|
-/// Reads and validates a default-format `ArchivedVec<u32>` header. The rkyv
-/// default profile is little-endian with 32-bit relative pointers and lengths,
-/// so its header is always eight bytes. This avoids repeated format dispatch
-/// and per-field bounds checks in the lazy hot path.
+/// Reads and validates a default-format `ArchivedVec<u32>` directly as a view.
+/// The rkyv default profile is little-endian with 32-bit relative pointers and
+/// lengths, so its header is always eight bytes. Returning the view directly
+/// avoids allocating an intermediate `VecHeader`/`Result` pair on the lazy
+/// hot path.
 #warnings("-alert_experimental")
-fn Reader::read_default_vec_u32_header(
+fn Reader::read_default_vec_u32(
   self : Reader,
   offset : Int,
-) -> Result[VecHeader, RkyvError] {
+) -> Result[U32VecView, RkyvError] {
   let input_length = self.bytes.length()
   if offset < 0 || offset > input_length - 8 {
     let size = 8
@@ -392,7 +407,7 @@ fn Reader::read_default_vec_u32_header(
   if length > available / 4 {
     Err(RkyvError::InvalidCollectionLength(length))
   } else {
-    Ok({ data_offset, length })
+    Ok({ reader: self, data_offset, length })
   }
 }
 
@@ -429,20 +444,18 @@ pub fn Reader::read_vec_u32(
   self : Reader,
   offset : Int,
 ) -> Result[U32VecView, RkyvError] {
-  let header = if self.format.endian == Endian::Little &&
-    self.format.pointer_width == 32 {
-    self.read_default_vec_u32_header(offset)
+  if self.format.endian == Endian::Little && self.format.pointer_width == 32 {
+    self.read_default_vec_u32(offset)
   } else {
-    self.read_vec_header_with_element_size(offset, 4)
-  }
-  match header {
-    Err(error) => Err(error)
-    Ok(header) =>
-      Ok({
-        reader: self,
-        data_offset: header.data_offset,
-        length: header.length,
-      })
+    match self.read_vec_header_with_element_size(offset, 4) {
+      Err(error) => Err(error)
+      Ok(header) =>
+        Ok({
+          reader: self,
+          data_offset: header.data_offset,
+          length: header.length,
+        })
+    }
   }
 }
 
@@ -484,40 +497,62 @@ pub fn U32VecView::at(
 }
 
 ///|
+/// Uses a native bulk copy to fill contiguous u32 storage. Native C compilers
+/// lower this fixed-size-width copy to vector instructions when profitable;
+/// the final conversion returns the public growable `Array` representation.
+#cfg(target="native")
+fn U32VecView::materialize_little_endian(self : U32VecView) -> Array[UInt] {
+  let storage : FixedArray[UInt] = FixedArray::make(self.length, 0U)
+  let source = bytes_as_fixed_array(self.reader.bytes)
+  copy_validated_u32s_native(source, self.data_offset, storage, self.length)
+  Array::from_fixed_array(storage)
+}
+
+///|
+/// Other targets retain lane extraction because their `Array[UInt]` backing
+/// representation is not a native contiguous 32-bit byte buffer.
+#cfg(not(target="native"))
+#warnings("-alert_experimental")
+fn U32VecView::materialize_little_endian(self : U32VecView) -> Array[UInt] {
+  let values : Array[UInt] = Array::make(self.length, 0U)
+  let bytes = bytes_as_fixed_array(self.reader.bytes)
+  let block_count = self.length / 4
+  for block in 0..<block_count {
+    let index = block * 4
+    let lanes = @v128.v128_load(bytes, self.data_offset + index * 4)
+    values.unsafe_set(index, @v128.i32x4_extract_lane(lanes, 0))
+    values.unsafe_set(index + 1, @v128.i32x4_extract_lane(lanes, 1))
+    values.unsafe_set(index + 2, @v128.i32x4_extract_lane(lanes, 2))
+    values.unsafe_set(index + 3, @v128.i32x4_extract_lane(lanes, 3))
+  }
+  let tail_start = block_count * 4
+  for index in tail_start..<self.length {
+    values.unsafe_set(
+      index,
+      self.reader.read_u32_in_validated_range(self.data_offset + index * 4),
+    )
+  }
+  values
+}
+
+///|
 /// Decodes every element after `read_vec_u32` has validated the full element
 /// span. Unlike the compatibility wrapper, this cannot fail.
 #warnings("-alert_experimental")
 pub fn U32VecView::to_array_fast(self : U32VecView) -> Array[UInt] {
-  let values : Array[UInt] = Array::make(self.length, 0U)
   match self.reader.format.endian {
-    Endian::Little => {
-      let bytes = bytes_as_fixed_array(self.reader.bytes)
-      let block_count = self.length / 4
-      for block in 0..<block_count {
-        let index = block * 4
-        let lanes = @v128.v128_load(bytes, self.data_offset + index * 4)
-        values.unsafe_set(index, @v128.i32x4_extract_lane(lanes, 0))
-        values.unsafe_set(index + 1, @v128.i32x4_extract_lane(lanes, 1))
-        values.unsafe_set(index + 2, @v128.i32x4_extract_lane(lanes, 2))
-        values.unsafe_set(index + 3, @v128.i32x4_extract_lane(lanes, 3))
-      }
-      let tail_start = block_count * 4
-      for index in tail_start..<self.length {
-        values.unsafe_set(
-          index,
-          self.reader.read_u32_in_validated_range(self.data_offset + index * 4),
-        )
-      }
-    }
-    Endian::Big =>
+    Endian::Little => self.materialize_little_endian()
+    Endian::Big => {
+      let values : Array[UInt] = Array::make(self.length, 0U)
       for index in 0..<self.length {
         values.unsafe_set(
           index,
           self.reader.read_u32_in_validated_range(self.data_offset + index * 4),
         )
       }
+      values
+    }
   }
-  values
 }
 
 ///|

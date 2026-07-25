@@ -45,6 +45,7 @@ just check
 just fmt
 just info
 just bench
+just profile
 just conformance
 ```
 
@@ -60,15 +61,18 @@ API）を用います。なお、これは言語ランタイム・配列実装�
 wasm-gc/JS target の MoonBit 性能や同一 ABI での純粋なアルゴリズム比較を表すものではありません。
 
 現在の Moon CLI には `moon bench --profile` はありません。`just bench-profile` は代わりに
-Reader 生成・Vec header/span 検証・検証済み view の `get` を個別に計測します。通常の利用では
+Reader 生成・Vec header/span 検証・検証済み view の `get` を個別に計測します。`just profile` は
+`moon run --profile --release --target native cmd/profile` を実行し、header 検証・lazy access・eager
+materialization を Time Profiler（macOS）で十分長く反復します。通常の利用では
 `read_vec_u32` の結果を保持し、複数の要素を `get` で読むと header 検証コストを一度にできます。
 
 `Reader::read_vec_u32` が返す `U32VecView` は生成時に全要素の byte span を検証済みです。
 そのため `view.get(index) -> UInt?` は有効な index の追加範囲検証なしに値を読みます。既存の
 `view.at(index) -> Result[UInt?, RkyvError]` と `view.to_array()` もこの fast path を内部利用し、
 互換性を保ちます。`view.to_array_fast() -> Array[UInt]` は検証済み view 専用の non-failing API で、
-little-endian では experimental `moonbitlang/core/v128` を使い 16 bytes（4要素）ずつ読みます。
-末尾要素と big-endian format は scalar fast path を使います。
+native target の little-endian では最適化済み bulk copy を使い、JS / wasm-gc などの他 target では
+experimental `moonbitlang/core/v128` で 16 bytes（4要素）ずつ読みます。big-endian format は scalar
+fast path を使います。
 
 デフォルトの rkyv format（little-endian / pointer width 32）では `read_vec_u32` も 8-byte header を
 一度だけ検証する専用経路を使います。big-endian または pointer width 16 / 64 を指定した `Reader` は、

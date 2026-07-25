@@ -163,6 +163,21 @@ test "materializes an ArchivedVec<u32> with SIMD blocks and a tail" {
 }
 
 ///|
+/// A native SIMD store writes the destination backing storage as bytes. These
+/// non-repeating bit patterns catch an accidental byte/word offset mismatch.
+test "materializes full-width u32 SIMD lanes without byte reordering" {
+  let expected = [
+    0x01020304U, 0x89abcdefU, 0xdeadbeefU, 0x76543210U, 0xfedcba98U,
+  ]
+  let archive = @rkyv.encode_vec_u32(expected)
+  let reader = @rkyv.Reader::new(archive)
+  match reader.read_vec_u32(expected.length() * 4) {
+    Err(_) => fail("valid Vec<u32> archive was rejected")
+    Ok(view) => assert_eq(view.to_array_fast(), expected)
+  }
+}
+
+///|
 /// The view validates the complete element range at construction time so a
 /// corrupted length cannot turn a later materialization into an unbounded loop.
 test "rejects an ArchivedVec<u32> whose declared elements are truncated" {

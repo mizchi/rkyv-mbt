@@ -19,6 +19,9 @@ bench-moonbit-native:
 bench-profile:
     moon bench --release --target native reader_bench.mbt
 
+profile:
+    moon run --profile --release --target native cmd/profile
+
 bench-rust:
     cargo bench --manifest-path conformance/rust/Cargo.toml
 
