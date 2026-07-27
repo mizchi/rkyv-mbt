@@ -34,6 +34,8 @@ the executable contract and its limits.
 - Default-format encoders for root `Vec<u32>` and `String`.
 - Little- and big-endian primitive readers with 16-, 32-, or 64-bit pointers.
 - Experimental Rust code generation for typed MoonBit views of named structs.
+- Experimental MoonBit-owned schemas for Rust-free default-format encoding and
+  schema-directed zero-copy views, including the JavaScript target.
 
 ## Usage
 
@@ -76,6 +78,106 @@ checking only the requested range. It does not validate a higher-level rkyv
 layout or UTF-8; use `read_string` when a decoded, validated `String` is
 needed.
 
+## Generated MoonBit schemas and JavaScript
+
+Use an `.mbtx` script as the source of truth, generate a typed MoonBit package,
+then import that package from the client. This keeps the dynamic `Schema` /
+`Value` representation out of application code while still using no Rust.
+
+### Direct host-defined schema API
+
+For a small or one-off archive, define the schema directly in MoonBit. The
+field declaration order in `Schema::Struct` is the archive layout contract.
+`Value::Struct` checks both the field count and names before encoding, and
+raises `SchemaError` if it does not match the schema.
+
+```moonbit nocheck
+///|
+let user = @rkyv.Schema::Struct([
+  { name: "id", schema: @rkyv.Schema::U32 },
+  { name: "active", schema: @rkyv.Schema::Bool },
+  { name: "name", schema: @rkyv.Schema::String },
+  { name: "scores", schema: @rkyv.Schema::VecU32 },
+])
+
+///|
+let archive = user.encode(
+  @rkyv.Value::Struct([
+    { name: "id", value: @rkyv.Value::U32(42U) },
+    { name: "active", value: @rkyv.Value::Bool(true) },
+    { name: "name", value: @rkyv.Value::String("Ada") },
+    { name: "scores", value: @rkyv.Value::VecU32([7U, 11U, 13U]) },
+  ]),
+) catch {
+  _ => abort("schema and value do not match")
+}
+```
+
+`root` opens a schema-directed zero-copy `View`. Accessing the vector does not
+materialize an `Array` unless the caller asks for one:
+
+```moonbit nocheck
+///|
+let root = user.root(archive) catch { _ => abort("invalid archive") }
+
+///|
+let name = root.field("name")
+
+///|
+let scores = root.field("scores")
+```
+
+[`examples/host_codegen/user_schema.mbtx`](examples/host_codegen/user_schema.mbtx)
+declares the input schema and renders
+[`examples/host_codegen/generated/user.mbt`](examples/host_codegen/generated/user.mbt):
+
+```moonbit nocheck
+///|
+let user = {
+  name: "User",
+  fields: [
+    { name: "id", typ: UInt32 },
+    { name: "active", typ: Bool },
+    { name: "name", typ: Text },
+    { name: "scores", typ: UInt32Array },
+  ],
+}
+emit_schema(user)
+```
+
+The JavaScript client imports only the generated API:
+
+```moonbit nocheck
+///|
+import {
+  "mizchi/rkyv/examples/host_codegen/generated" @user,
+}
+
+///|
+let archive = @user.encode(42U, true, "Ada", [7U, 11U, 13U])
+
+///|
+let root = @user.root(archive)
+
+///|
+let name = root.field("name")
+```
+
+Regenerate after changing the source schema. `host-js` first confirms that the
+checked-in generated source is current, then runs the client entirely under the
+JS target:
+
+```sh
+just host-schema
+just host-js
+# Ada: 3 scores
+```
+
+The current generator supports `u32`, `bool`, `String`, and `Vec<u32>` fields.
+Field declaration order is the layout contract. It does not infer arbitrary
+Rust `Archived<T>` field offsets; for a schema shared with an existing Rust
+type, verify its bytes against Rust or use the Rust layout codegen path.
+
 ## Benchmarks
 
 Native release results for a 4,096-element `Vec<u32>`. The archive is built
@@ -103,6 +205,7 @@ just bench
 just bench-profile
 just bench-compare
 just profile
+just host-js
 ```
 
 For throughput-sensitive code, retain a `U32VecView` for repeated `get` calls,

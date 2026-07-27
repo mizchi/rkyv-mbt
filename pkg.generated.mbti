@@ -25,11 +25,22 @@ pub suberror RkyvError {
   InvalidUtf8
 } derive(Eq, @debug.Debug)
 
+pub(all) suberror SchemaError {
+  TypeMismatch(expected~ : String)
+  FieldCountMismatch(expected~ : Int, actual~ : Int)
+  FieldMismatch(expected~ : String, actual~ : String)
+} derive(Eq, @debug.Debug)
+
 // Types and methods
 pub enum Endian {
   Little
   Big
 } derive(Eq, @debug.Debug)
+
+pub(all) struct Field {
+  name : String
+  schema : Schema
+}
 
 pub struct Format {
   endian : Endian
@@ -72,6 +83,16 @@ pub fn Reader::root_offset(Self, Int) -> Int raise RkyvError
 pub fn Reader::validate_range(Self, Int, Int) -> Unit raise RkyvError
 pub fn Reader::with_format(Bytes, Format) -> Self
 
+pub(all) enum Schema {
+  U32
+  Bool
+  String
+  VecU32
+  Struct(Array[Field])
+}
+pub fn Schema::encode(Self, Value) -> Bytes raise SchemaError
+pub fn Schema::root(Self, Bytes) -> View raise RkyvError
+
 pub struct U32VecView {
   bytes : Bytes
   format : Format
@@ -88,10 +109,34 @@ pub fn U32VecView::to_array(Self) -> Array[UInt]
 pub fn U32VecView::to_array_fast(Self) -> Array[UInt]
 pub fn U32VecView::to_fixed_array_fast(Self) -> FixedArray[UInt]
 
+pub(all) enum Value {
+  U32(UInt)
+  Bool(Bool)
+  String(String)
+  VecU32(Array[UInt])
+  Struct(Array[ValueField])
+}
+
+pub(all) struct ValueField {
+  name : String
+  value : Value
+}
+
 pub struct VecHeader {
   data_offset : Int
   length : Int
 } derive(Eq, @debug.Debug)
+
+pub struct View {
+  schema : Schema
+  reader : Reader
+  offset : Int
+}
+pub fn View::field(Self, String) -> Self?
+pub fn View::read_bool(Self) -> Bool? raise RkyvError
+pub fn View::read_string(Self) -> String? raise RkyvError
+pub fn View::read_u32(Self) -> UInt? raise RkyvError
+pub fn View::read_vec_u32(Self) -> U32VecView? raise RkyvError
 
 // Type aliases
 

@@ -1,0 +1,6 @@
+import {
+  "mizchi/rkyv",
+  "mizchi/rkyv/examples/host_codegen/generated" @user,
+}
+
+pkgtype(kind: "executable")

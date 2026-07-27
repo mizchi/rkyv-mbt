@@ -70,10 +70,10 @@ impl StructSchema {
         output.push_str("///|\n");
         let root_signature =
             format!("pub fn {view}::root(bytes : Bytes) -> {view} raise @rkyv.RkyvError {{");
-        // moonfmt keeps the 81-column ProfileView/AccountView forms on one
-        // line, but wraps the 85-column DirectoryView form. Keep generated
+        // moonfmt keeps the shorter ProfileView/AccountView forms on one line,
+        // but wraps the 82-column DirectoryView form. Keep generated
         // fixtures formatter-stable instead of requiring a formatting pass.
-        if root_signature.len() > 82 {
+        if root_signature.len() >= 82 {
             writeln!(output, "pub fn {view}::root(").unwrap();
             output.push_str("  bytes : Bytes,\n");
             writeln!(output, ") -> {view} raise @rkyv.RkyvError {{").unwrap();

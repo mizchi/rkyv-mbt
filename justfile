@@ -22,6 +22,15 @@ bench-profile:
 profile:
     moon run --profile --release --target native cmd/profile
 
+host-schema:
+    moon run examples/host_codegen/user_schema.mbtx > examples/host_codegen/generated/user.mbt
+
+check-host-schema:
+    moon run examples/host_codegen/user_schema.mbtx | diff - examples/host_codegen/generated/user.mbt
+
+host-js: check-host-schema
+    moon run --target js cmd/host_js
+
 bench-rust:
     cargo bench --manifest-path conformance/rust/Cargo.toml
 
@@ -30,6 +39,7 @@ bench-compare:
     just bench-rust
 
 conformance:
+    just check-host-schema
     moon test
     cargo test --manifest-path conformance/rust/Cargo.toml
     cargo test --workspace
