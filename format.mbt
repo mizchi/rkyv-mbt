@@ -17,7 +17,7 @@ pub struct Format {
 ///|
 /// Errors returned while safely reading an archive. This reader deliberately
 /// checks bounds, unlike rkyv's `access_unchecked` APIs.
-pub enum RkyvError {
+pub suberror RkyvError {
   OutOfBounds(offset~ : Int, size~ : Int, length~ : Int)
   InvalidPointerWidth(Int)
   InvalidAlignment(Int)

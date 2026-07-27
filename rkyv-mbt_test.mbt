@@ -119,6 +119,73 @@ test "reads an ArchivedVec<u32> lazily and materializes on demand" {
 }
 
 ///|
+/// The raised lazy-view API is a normal-path alternative to `Result` for
+/// callers that already use MoonBit exception handling at their archive
+/// boundary. It must retain the same validation and error payloads.
+test "reads an ArchivedVec<u32> lazily with raise" {
+  let valid = @rkyv.Reader::new(
+    Bytes::from_array([
+      b'\x01', b'\x00', b'\x00', b'\x00', b'\x02', b'\x00', b'\x00', b'\x00', b'\x03',
+      b'\x00', b'\x00', b'\x00', b'\xf4', b'\xff', b'\xff', b'\xff', b'\x03', b'\x00',
+      b'\x00', b'\x00',
+    ]),
+  )
+  let view = valid.read_vec_u32_or_raise(12)
+  assert_eq(view.length(), 3)
+  assert_eq(view.get(1), Some(2U))
+
+  let truncated = @rkyv.Reader::new(
+    Bytes::from_array([
+      b'\x08', b'\x00', b'\x00', b'\x00', b'\x03', b'\x00', b'\x00', b'\x00', b'\x01',
+      b'\x00', b'\x00', b'\x00',
+    ]),
+  )
+  let mut raised = false
+  try {
+    let _ = truncated.read_vec_u32_or_raise(0)
+  } catch {
+    @rkyv.RkyvError::InvalidCollectionLength(length) => {
+      assert_eq(length, 3)
+      raised = true
+    }
+    _ => fail("truncated Vec<u32> returned the wrong raised error")
+  }
+  assert_true(raised)
+}
+
+///|
+/// Raised header and copy APIs must preserve the `Result` APIs' validation
+/// contract, including leaving a short destination unchanged.
+test "uses raised Vec<u32> header and copy APIs" {
+  let reader = @rkyv.Reader::new(
+    Bytes::from_array([
+      b'\x01', b'\x00', b'\x00', b'\x00', b'\x02', b'\x00', b'\x00', b'\x00', b'\x03',
+      b'\x00', b'\x00', b'\x00', b'\xf4', b'\xff', b'\xff', b'\xff', b'\x03', b'\x00',
+      b'\x00', b'\x00',
+    ]),
+  )
+  assert_eq(reader.read_vec_u32_length_or_raise(12), 3)
+
+  let destination : FixedArray[UInt] = FixedArray::make(4, 99U)
+  assert_eq(reader.read_vec_u32_into_or_raise(12, destination), 3)
+  assert_eq(Array::from_fixed_array(destination), [1U, 2U, 3U, 99U])
+
+  let view = reader.read_vec_u32_or_raise(12)
+  let too_short : FixedArray[UInt] = FixedArray::make(2, 77U)
+  let mut raised = false
+  view.copy_into_or_raise(too_short) catch {
+    @rkyv.RkyvError::DestinationTooSmall(required~, actual~) => {
+      assert_eq(required, 3)
+      assert_eq(actual, 2)
+      raised = true
+    }
+    _ => fail("short destination returned the wrong raised error")
+  }
+  assert_true(raised)
+  assert_eq(Array::from_fixed_array(too_short), [77U, 77U])
+}
+
+///|
 /// Header-only consumers can validate the full archived span without retaining
 /// a view of the backing bytes.
 test "validates an ArchivedVec<u32> length without constructing a view" {

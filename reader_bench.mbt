@@ -65,6 +65,23 @@ test "ArchivedVec<u32> validated selected element / 4K" (b : @bench.T) {
 }
 
 ///|
+/// Compares the raised API on the same successful default-format archive.
+/// The local catch is never entered in this benchmark; it is required only to
+/// make the benchmark failure explicit if the fixture becomes invalid.
+test "ArchivedVec<u32> raised selected element / 4K" (b : @bench.T) {
+  let element_count = 4096
+  let archive = benchmark_vec_archive(element_count)
+  let root_offset = element_count * 4
+  b.bench(fn() {
+    let reader = Reader::new(archive)
+    let view = reader.read_vec_u32_or_raise(root_offset) catch {
+      _ => abort("benchmark archive must be valid")
+    }
+    b.keep(view.get(element_count / 2))
+  })
+}
+
+///|
 /// Materializes the same 4,096-element archive into a MoonBit array. The
 /// default little-endian path loads four `u32` values per v128 block.
 test "ArchivedVec<u32> SIMD eager materialization / 4K" (b : @bench.T) {

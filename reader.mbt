@@ -465,6 +465,39 @@ fn Reader::read_default_vec_u32(
 }
 
 ///|
+/// Reads a default-format `ArchivedVec<u32>` without constructing a `Result`
+/// on the validated path. Invalid archives raise the same `RkyvError` values
+/// returned by `read_default_vec_u32`.
+#warnings("-alert_experimental")
+fn Reader::read_default_vec_u32_or_raise(
+  self : Reader,
+  offset : Int,
+) -> U32VecView raise RkyvError {
+  let input_length = self.bytes.length()
+  if offset < 0 || offset > input_length - 8 {
+    let size = 8
+    let length = input_length
+    raise RkyvError::OutOfBounds(offset~, size~, length~)
+  }
+  let header = @v128.v128_load64_zero(bytes_as_fixed_array(self.bytes), offset)
+  let relative = @v128.i32x4_extract_lane(header, 0).reinterpret_as_int()
+  let raw_length = @v128.i32x4_extract_lane(header, 1)
+  if raw_length > 0x7fff_ffffU {
+    raise RkyvError::LengthOverflow(raw_length.reinterpret_as_int())
+  }
+  let length = raw_length.reinterpret_as_int()
+  let data_offset = offset + relative
+  if data_offset < 0 || data_offset > input_length {
+    raise RkyvError::InvalidRelativePointer(relative)
+  }
+  let available = input_length - data_offset
+  if length > available / 4 {
+    raise RkyvError::InvalidCollectionLength(length)
+  }
+  { bytes: self.bytes, format: self.format, data_offset, length }
+}
+
+///|
 /// Reads an `ArchivedVec<T>` header and validates its complete element range.
 /// Generated bindings supply the archived element size measured by the Rust
 /// compiler, preventing a corrupted length from escaping as a lazy view.
@@ -514,6 +547,31 @@ pub fn Reader::read_vec_u32(
 }
 
 ///|
+/// Reads an `ArchivedVec<u32>` as a zero-copy typed view and raises
+/// `RkyvError` when validation fails. On rkyv's default format this avoids
+/// constructing a `Result` on the successful path; retain `read_vec_u32`
+/// when errors are part of ordinary control flow.
+pub fn Reader::read_vec_u32_or_raise(
+  self : Reader,
+  offset : Int,
+) -> U32VecView raise RkyvError {
+  if self.format.endian == Endian::Little && self.format.pointer_width == 32 {
+    self.read_default_vec_u32_or_raise(offset)
+  } else {
+    match self.read_vec_header_with_element_size(offset, 4) {
+      Ok(header) =>
+        {
+          bytes: self.bytes,
+          format: self.format,
+          data_offset: header.data_offset,
+          length: header.length,
+        }
+      Err(error) => raise error
+    }
+  }
+}
+
+///|
 /// Validates an `ArchivedVec<u32>` and returns only its element count. Unlike
 /// `read_vec_u32`, this does not create a `U32VecView` or retain the archive.
 /// Use it for header-only consumers; use `read_vec_u32` when reading elements.
@@ -529,6 +587,17 @@ pub fn Reader::read_vec_u32_length(
       Ok(header) => Ok(header.length)
     }
   }
+}
+
+///|
+/// Validates an `ArchivedVec<u32>` and returns its element count, raising
+/// `RkyvError` on malformed input. This is the raised counterpart of
+/// `read_vec_u32_length` for callers that do not use errors as values.
+pub fn Reader::read_vec_u32_length_or_raise(
+  self : Reader,
+  offset : Int,
+) -> Int raise RkyvError {
+  self.read_vec_u32_or_raise(offset).length()
 }
 
 ///|
@@ -549,6 +618,20 @@ pub fn Reader::read_vec_u32_into(
         Ok(_) => Ok(view.length())
       }
   }
+}
+
+///|
+/// Validates and copies an `ArchivedVec<u32>` into caller-owned fixed-size
+/// storage, raising `RkyvError` on invalid input or a short destination. The
+/// destination remains unchanged when it is too short.
+pub fn Reader::read_vec_u32_into_or_raise(
+  self : Reader,
+  offset : Int,
+  destination : FixedArray[UInt],
+) -> Int raise RkyvError {
+  let view = self.read_vec_u32_or_raise(offset)
+  view.copy_into_or_raise(destination)
+  view.length()
 }
 
 ///|
@@ -661,6 +744,21 @@ pub fn U32VecView::copy_into(
   }
   self.copy_into_validated(destination)
   Ok(())
+}
+
+///|
+/// Copies a validated view into caller-owned fixed-size storage, raising
+/// `DestinationTooSmall` without modifying the destination when it cannot
+/// contain the full vector.
+pub fn U32VecView::copy_into_or_raise(
+  self : U32VecView,
+  destination : FixedArray[UInt],
+) -> Unit raise RkyvError {
+  let actual = destination.length()
+  if actual < self.length {
+    raise RkyvError::DestinationTooSmall(required=self.length, actual~)
+  }
+  self.copy_into_validated(destination)
 }
 
 ///|
