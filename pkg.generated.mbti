@@ -51,6 +51,25 @@ pub fn Format::big_endian(Int, Bool) -> Self
 pub fn Format::new(Endian, Int, Bool) -> Self
 pub fn Format::pointer_bytes(Self) -> Int raise RkyvError
 
+pub struct MutU32VecView {
+  bytes : MutArrayView[Byte]
+  data_offset : Int
+  length : Int
+}
+pub fn MutU32VecView::length(Self) -> Int
+pub fn MutU32VecView::set(Self, Int, UInt) -> Bool
+
+pub struct MutView {
+  schema : Schema
+  bytes : MutArrayView[Byte]
+  offset : Int
+}
+pub fn MutView::field(Self, String) -> Self?
+pub fn MutView::set_bool(Self, Bool) -> Bool
+pub fn MutView::set_string(Self, String) -> Bool raise RkyvError
+pub fn MutView::set_u32(Self, UInt) -> Bool
+pub fn MutView::vec_u32_mut(Self) -> MutU32VecView? raise RkyvError
+
 pub struct Reader {
   bytes : Bytes
   format : Format
@@ -91,7 +110,9 @@ pub(all) enum Schema {
   Struct(Array[Field])
 }
 pub fn Schema::encode(Self, Value) -> Bytes raise SchemaError
+pub fn Schema::encode_mut(Self, Value) -> Array[Byte] raise SchemaError
 pub fn Schema::root(Self, Bytes) -> View raise RkyvError
+pub fn Schema::root_mut(Self, MutArrayView[Byte]) -> MutView raise RkyvError
 
 pub struct U32VecView {
   bytes : Bytes

@@ -91,6 +91,10 @@ field declaration order in `Schema::Struct` is the archive layout contract.
 `Value::Struct` checks both the field count and names before encoding, and
 raises `SchemaError` if it does not match the schema.
 
+This direct form is runtime-checked because field names and schemas are values.
+Use the generated API below when callers need compile-time field and value
+types.
+
 ```moonbit nocheck
 ///|
 let user = @rkyv.Schema::Struct([
@@ -127,6 +131,44 @@ let name = root.field("name")
 let scores = root.field("scores")
 ```
 
+### In-place archive updates
+
+Use `encode_mut` when the archive buffer must remain caller-owned. `root_mut`
+validates the root and provides `MutView` setters that never relocate data:
+`set_u32`, `set_bool`, `set_string` with the same UTF-8 byte length, and
+`vec_u32_mut().set` for an existing vector index. Changing a string or vector
+length still requires re-encoding the archive.
+
+```moonbit nocheck
+///|
+let archive = user.encode_mut(
+  @rkyv.Value::Struct([
+    { name: "id", value: @rkyv.Value::U32(42U) },
+    { name: "active", value: @rkyv.Value::Bool(true) },
+    { name: "name", value: @rkyv.Value::String("Ada") },
+    { name: "scores", value: @rkyv.Value::VecU32([7U, 11U, 13U]) },
+  ]),
+)
+
+///|
+let root = user.root_mut(archive.mut_view())
+
+///|
+match root.field("id") {
+  Some(id) => ignore(id.set_u32(99U))
+  None => abort("missing id")
+}
+
+///|
+match root.field("scores") {
+  Some(scores) => match scores.vec_u32_mut() {
+    Some(scores) => ignore(scores.set(1, 42U))
+    None => abort("scores is not Vec<u32>")
+  }
+  None => abort("missing scores")
+}
+```
+
 [`examples/host_codegen/user_schema.mbtx`](examples/host_codegen/user_schema.mbtx)
 declares the input schema and renders
 [`examples/host_codegen/generated/user.mbt`](examples/host_codegen/generated/user.mbt):
@@ -145,7 +187,11 @@ let user = {
 emit_schema(user)
 ```
 
-The JavaScript client imports only the generated API:
+The JavaScript client imports only the generated API. It receives schema-specific
+`UserView` and `UserMutView` types: callers cannot pass a field name, and the
+type of every getter and setter is fixed by the source schema.
+`encode` always returns caller-owned `Array[Byte]`; convert it explicitly with
+`Bytes::from_array` when opening a read-only view.
 
 ```moonbit nocheck
 ///|
@@ -157,10 +203,30 @@ import {
 let archive = @user.encode(42U, true, "Ada", [7U, 11U, 13U])
 
 ///|
-let root = @user.root(archive)
+let root = @user.UserView::root(Bytes::from_array(archive))
 
 ///|
-let name = root.field("name")
+let name : String = root.name()
+
+///|
+let scores : @rkyv.U32VecView = root.scores()
+```
+
+For an in-place update, the generated mutable view exposes only valid setters:
+
+```moonbit nocheck
+///|
+let archive = @user.encode(42U, true, "Ada", [7U, 11U, 13U])
+
+///|
+let writer = @user.UserMutView::root(archive.mut_view())
+
+///|
+writer.set_id(99U)
+writer.set_active(false)
+let patched : Bool = writer.set_name_same_length("Eve")
+let scores = writer.scores_mut()
+ignore(scores.set(1, 42U))
 ```
 
 Regenerate after changing the source schema. `host-js` first confirms that the
@@ -170,7 +236,7 @@ JS target:
 ```sh
 just host-schema
 just host-js
-# Ada: 3 scores
+# Eve: 3 scores
 ```
 
 The current generator supports `u32`, `bool`, `String`, and `Vec<u32>` fields.

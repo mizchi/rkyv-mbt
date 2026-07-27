@@ -54,6 +54,25 @@ pub struct View {
 }
 
 ///|
+/// A schema-directed mutable view over a caller-owned archive buffer. It can
+/// update only fixed-width fields, so no relative pointer or collection length
+/// can become invalid.
+pub struct MutView {
+  schema : Schema
+  bytes : MutArrayView[Byte]
+  offset : Int
+}
+
+///|
+/// A mutable view of an existing `ArchivedVec<u32>`. It can replace elements
+/// in place, but cannot change the vector length or move its data.
+pub struct MutU32VecView {
+  bytes : MutArrayView[Byte]
+  data_offset : Int
+  length : Int
+}
+
+///|
 /// The size and alignment of one archived value under the default rkyv
 /// profile. Struct offsets are retained so nested values can be written in one
 /// contiguous root representation after their dependencies have been emitted.
@@ -128,6 +147,19 @@ fn schema_append_zeroes(out : Array[Byte], count : Int) -> Unit {
 ///|
 /// Writes a little-endian u32 into an already allocated archive span.
 fn schema_write_u32_le(out : Array[Byte], offset : Int, value : UInt) -> Unit {
+  out[offset] = (value & 0xffU).to_byte()
+  out[offset + 1] = ((value >> 8) & 0xffU).to_byte()
+  out[offset + 2] = ((value >> 16) & 0xffU).to_byte()
+  out[offset + 3] = ((value >> 24) & 0xffU).to_byte()
+}
+
+///|
+/// Writes a little-endian `u32` into a caller-owned mutable archive buffer.
+fn schema_write_mut_u32_le(
+  out : MutArrayView[Byte],
+  offset : Int,
+  value : UInt,
+) -> Unit {
   out[offset] = (value & 0xffU).to_byte()
   out[offset + 1] = ((value >> 8) & 0xffU).to_byte()
   out[offset + 2] = ((value >> 16) & 0xffU).to_byte()
@@ -295,10 +327,13 @@ fn Schema::write_prepared(
 }
 
 ///|
-/// Encodes a host-defined value into rkyv 0.8's aligned, little-endian,
-/// 32-bit-pointer default archive format. This function is target-independent,
-/// so `moon build --target js` produces the same bytes without Rust.
-pub fn Schema::encode(self : Schema, value : Value) -> Bytes raise SchemaError {
+/// Encodes a host-defined value into a caller-owned mutable rkyv archive. This
+/// function is target-independent, so `moon build --target js` produces the
+/// same bytes without Rust.
+pub fn Schema::encode_mut(
+  self : Schema,
+  value : Value,
+) -> Array[Byte] raise SchemaError {
   let out : Array[Byte] = []
   let prepared = self.prepare(value, out)
   let layout = self.layout()
@@ -306,7 +341,14 @@ pub fn Schema::encode(self : Schema, value : Value) -> Bytes raise SchemaError {
   let root_offset = out.length()
   schema_append_zeroes(out, layout.size)
   self.write_prepared(prepared, out, root_offset)
-  Bytes::from_array(out)
+  out
+}
+
+///|
+/// Encodes a value into an immutable rkyv archive. Use `encode_mut` when the
+/// caller intends to apply later fixed-width in-place updates.
+pub fn Schema::encode(self : Schema, value : Value) -> Bytes raise SchemaError {
+  Bytes::from_array(self.encode_mut(value))
 }
 
 ///|
@@ -318,6 +360,20 @@ pub fn Schema::root(self : Schema, bytes : Bytes) -> View raise RkyvError {
   let layout = self.layout()
   let offset = reader.root_offset(layout.size)
   { schema: self, reader, offset }
+}
+
+///|
+/// Opens a mutable root over caller-owned archive bytes. The inline root span
+/// is validated before the view is returned; collection fields are additionally
+/// validated when `vec_u32_mut` is requested.
+pub fn Schema::root_mut(
+  self : Schema,
+  bytes : MutArrayView[Byte],
+) -> MutView raise RkyvError {
+  let reader = Reader::new(Bytes::from_array(bytes.view()))
+  let layout = self.layout()
+  let offset = reader.root_offset(layout.size)
+  { schema: self, bytes, offset }
 }
 
 ///|
@@ -341,6 +397,131 @@ pub fn View::field(self : View, name : String) -> View? {
       found
     }
     _ => None
+  }
+}
+
+///|
+/// Returns a nested mutable struct field by name. `None` means this view is
+/// not a struct or that the requested field does not exist.
+pub fn MutView::field(self : MutView, name : String) -> MutView? {
+  match self.schema {
+    Schema::Struct(fields) => {
+      let layout = self.schema.layout()
+      let mut found = None
+      for index in 0..<fields.length() {
+        let field = fields[index]
+        if field.name == name {
+          found = Some({
+            schema: field.schema,
+            bytes: self.bytes,
+            offset: self.offset + layout.field_offsets[index],
+          })
+        }
+      }
+      found
+    }
+    _ => None
+  }
+}
+
+///|
+/// Replaces a `u32` field in place. Returns `false` if this view's schema is
+/// not `Schema::U32`.
+pub fn MutView::set_u32(self : MutView, value : UInt) -> Bool {
+  match self.schema {
+    Schema::U32 => {
+      schema_write_mut_u32_le(self.bytes, self.offset, value)
+      true
+    }
+    _ => false
+  }
+}
+
+///|
+/// Replaces a boolean field in place. Returns `false` if this view's schema is
+/// not `Schema::Bool`.
+pub fn MutView::set_bool(self : MutView, value : Bool) -> Bool {
+  match self.schema {
+    Schema::Bool => {
+      self.bytes[self.offset] = if value { b'\x01' } else { b'\x00' }
+      true
+    }
+    _ => false
+  }
+}
+
+///|
+/// Replaces a string only when its UTF-8 byte length is unchanged. The archive
+/// representation, relative pointer, and inline/out-of-line choice therefore
+/// remain valid. Returns `false` for a different-length string or a non-string
+/// schema; malformed archived strings raise `RkyvError` before any write.
+pub fn MutView::set_string(
+  self : MutView,
+  value : String,
+) -> Bool raise RkyvError {
+  match self.schema {
+    Schema::String => {
+      let snapshot = Bytes::from_array(self.bytes.view())
+      let reader = Reader::new(snapshot)
+      let current = reader.read_string(self.offset)
+      let replacement = @utf8.encode(value)
+      if replacement.length() != @utf8.encode(current).length() {
+        false
+      } else {
+        let first = self.bytes[self.offset].to_int()
+        let data_offset = if (first & 0xc0) != 0x80 {
+          self.offset
+        } else {
+          self.offset + reader.read_rel_ptr_offset(self.offset + 4)
+        }
+        for index in 0..<replacement.length() {
+          self.bytes[data_offset + index] = replacement[index]
+        }
+        true
+      }
+    }
+    _ => false
+  }
+}
+
+///|
+/// Opens a mutable view of an existing `Vec<u32>`. The header and full element
+/// span are checked before returning the view. The snapshot used for validation
+/// is discarded; writes always target the caller-owned mutable buffer.
+pub fn MutView::vec_u32_mut(self : MutView) -> MutU32VecView? raise RkyvError {
+  match self.schema {
+    Schema::VecU32 => {
+      let reader = Reader::new(Bytes::from_array(self.bytes.view()))
+      let view = reader.read_vec_u32(self.offset)
+      Some({
+        bytes: self.bytes,
+        data_offset: view.data_offset,
+        length: view.length,
+      })
+    }
+    _ => None
+  }
+}
+
+///|
+/// Returns the fixed archived element count of this mutable vector view.
+pub fn MutU32VecView::length(self : MutU32VecView) -> Int {
+  self.length
+}
+
+///|
+/// Replaces one existing vector element in place. Returns `false` for an
+/// out-of-range index; this API never resizes or relocates the vector.
+pub fn MutU32VecView::set(
+  self : MutU32VecView,
+  index : Int,
+  value : UInt,
+) -> Bool {
+  if index < 0 || index >= self.length {
+    false
+  } else {
+    schema_write_mut_u32_le(self.bytes, self.data_offset + index * 4, value)
+    true
   }
 }
 
