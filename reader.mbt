@@ -103,6 +103,16 @@ pub fn Reader::validate_range(
 }
 
 ///|
+/// Enforces the recursion limit used by generated full-archive validators.
+/// The constructor stays inside this package because `RkyvError` is a
+/// `suberror` and cannot be constructed by generated client packages.
+pub fn require_validation_depth(remaining_depth : Int) -> Unit raise RkyvError {
+  if remaining_depth <= 0 {
+    raise RkyvError::DepthLimit(remaining_depth)
+  }
+}
+
+///|
 /// Gets the byte offset of a root whose archived representation has `size`
 /// bytes. rkyv writes dependencies first and puts the root at the end.
 pub fn Reader::root_offset(self : Reader, size : Int) -> Int raise RkyvError {
@@ -190,6 +200,39 @@ pub fn Reader::read_f32(self : Reader, offset : Int) -> Float raise RkyvError {
 /// Reads rkyv's one-byte boolean representation.
 pub fn Reader::read_bool(self : Reader, offset : Int) -> Bool raise RkyvError {
   self.read_u8(offset) != b'\x00'
+}
+
+///|
+/// Reads a boolean for an untrusted archive. Unlike `read_bool`, this rejects
+/// values other than rkyv's canonical `0` and `1` discriminants.
+pub fn Reader::read_bool_strict(
+  self : Reader,
+  offset : Int,
+) -> Bool raise RkyvError {
+  match self.read_u8(offset) {
+    b'\x00' => false
+    b'\x01' => true
+    value => raise RkyvError::InvalidBool(value)
+  }
+}
+
+///|
+/// Reads a `#[repr(u8)]` enum tag for an untrusted archive. The accepted tags
+/// are supplied by generated bindings; an unknown value is raised from inside
+/// this package because `RkyvError` is intentionally a read-only suberror to
+/// downstream MoonBit packages.
+pub fn Reader::read_union_tag(
+  self : Reader,
+  offset : Int,
+  accepted : Array[Byte],
+) -> Byte raise RkyvError {
+  let value = self.read_u8(offset)
+  for tag in accepted {
+    if tag == value {
+      return value
+    }
+  }
+  raise RkyvError::InvalidUnionTag(value)
 }
 
 ///|
@@ -660,6 +703,31 @@ pub fn Reader::read_option_value_offset(
       value_alignment
     self.require(value_offset, 0)
     Some(value_offset)
+  }
+}
+
+///|
+/// Resolves an `ArchivedOption<T>` for an untrusted archive and rejects tags
+/// other than rkyv's canonical `0` (`None`) and `1` (`Some`) values.
+pub fn Reader::read_option_value_offset_strict(
+  self : Reader,
+  offset : Int,
+  value_alignment : Int,
+) -> Int? raise RkyvError {
+  if value_alignment <= 0 {
+    raise RkyvError::InvalidAlignment(value_alignment)
+  }
+  match self.read_u8(offset) {
+    b'\x00' => None
+    b'\x01' => {
+      let after_tag = offset + 1
+      let value_offset = (after_tag + value_alignment - 1) /
+        value_alignment *
+        value_alignment
+      self.require(value_offset, 0)
+      Some(value_offset)
+    }
+    value => raise RkyvError::InvalidOptionTag(value)
   }
 }
 

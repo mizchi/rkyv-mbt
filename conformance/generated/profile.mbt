@@ -21,6 +21,25 @@ pub fn ProfileView::root(bytes : Bytes) -> ProfileView raise @rkyv.RkyvError {
 }
 
 ///|
+pub fn ProfileView::validate(
+  bytes : Bytes,
+) -> ProfileView raise @rkyv.RkyvError {
+  let view = ProfileView::root(bytes)
+  view.validate_all(256)
+  view
+}
+
+///|
+pub fn ProfileView::validate_all(
+  self : ProfileView,
+  remaining_depth : Int,
+) -> Unit raise @rkyv.RkyvError {
+  @rkyv.require_validation_depth(remaining_depth)
+  let _ = self.reader.read_u32(self.offset)
+  let _ = self.reader.read_bool_strict(self.offset + 4)
+}
+
+///|
 pub fn ProfileView::age(self : ProfileView) -> UInt raise @rkyv.RkyvError {
   self.reader.read_u32(self.offset)
 }

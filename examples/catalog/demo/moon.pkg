@@ -1,0 +1,7 @@
+import {
+  "mizchi/rkyv/examples/catalog/client",
+}
+
+pkgtype(kind: "executable")
+
+supported_targets = "js"

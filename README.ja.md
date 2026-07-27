@@ -16,7 +16,8 @@ Rust 型から生成する binding に分けています。
 - aligned archive
 - 32-bit relative pointer と archived `usize`
 
-双方向の互換性保証は現在 root の `Vec<u32>` と `String` に限ります。実行可能な契約と制約は
+実行可能な互換性契約は checked reader の primitive、host-defined の scalar / vector / option /
+tagged union schema、および generated catalog binding を対象にします。fixture と制約は
 [conformance/README.md](conformance/README.md) を参照してください。
 
 ## 機能
@@ -26,11 +27,12 @@ Rust 型から生成する binding に分けています。
 - relative pointer、`ArchivedVec<T>` header、`ArchivedOption<T>` value offset
 - archive の任意範囲をコピーせず借用する bounds-checked `BytesView`
 - `ArchivedVec<u32>` の zero-copy lazy view、`Array` / `FixedArray` への materialize、再利用 buffer への copy
-- root `Vec<u32>` と `String` のデフォルト format encoder
+- primitive、String、vector、option、struct、明示的 tagged union を書ける default format の schema encoder
 - little-endian / big-endian と pointer width 16 / 32 / 64 の primitive reader
 - named struct 用の実験的な Rust → MoonBit typed binding codegen
 - Rust を使わず default format の encode と schema-directed zero-copy view を行う、実験的な MoonBit
   schema（JavaScript target を含む）
+- format flag、payload length、CRC-32、untrusted input 用 payload 上限を持つ optional な `RMBT` v1 envelope
 
 ## 使い方
 
@@ -45,9 +47,27 @@ let view = reader.read_vec_u32(archive_bytes.length() - 8) catch {
 }
 ```
 
-失敗しうる Reader と generated view の API はすべて `RkyvError` を raise します。archive 境界で
-一度だけ catch し、検証済みの zero-copy view を以降の処理へ渡してください。信頼できない入力に
-対する Rust の `bytecheck` を完全に置き換えるものではありません。
+失敗しうる Reader と generated view の API はすべて `RkyvError` を raise します。信頼済み archive には
+lazy な `View::root` を使えます。信頼できない入力には generated view の `View::validate(bytes)` を使ってください。
+対応 field 全体を走査し、pointer・collection span・UTF-8・canonical な bool / `Option` / enum tag を検証し、再帰は
+256 段で打ち切ります。返すのは同じ zero-copy view です。これは対応済み schema に限定した検証であり、任意の
+rkyv type に対する Rust `bytecheck` の完全な代替ではありません。
+
+### Transport envelope
+
+file、network、cache から受け取る bytes は、通常の rkyv payload を optional な `RMBT` v1 envelope で
+包めます。format、payload length、CRC-32 を記録し、`decode_envelope_with_limit` は payload を copy する前に
+呼び出し側の上限を超える宣言 length を拒否します。envelope を確認してから generated validator へ payload を渡します。
+
+```moonbit nocheck
+let envelope = @rkyv.encode_envelope(archive)
+let decoded = @rkyv.decode_envelope_with_limit(envelope, 16 * 1024 * 1024) catch {
+  error => abort("invalid archive transport: \{error}")
+}
+let view = @catalog.CatalogView::validate(decoded.payload_bytes()) catch {
+  error => abort("invalid rkyv archive: \{error}")
+}
+```
 
 collection の主 API は `read_vec_u32`、`read_vec_u32_length`、`read_vec_u32_into`、
 `U32VecView::copy_into` です。正常系では error wrapper を生成せず、先に archive 全体を検証します。
@@ -225,6 +245,29 @@ just host-js
 layout contract とします。既存の任意 Rust `Archived<T>` の field offset を推論するものではないため、
 同じ schema を Rust type と共有する場合は Rust との byte 比較で確認するか、Rust layout codegen を使ってください。
 
+## ドッグフーディング: static product catalog
+
+[`examples/catalog`](examples/catalog) は production を想定した end-to-end の例です。Rust の build step が
+`Catalog { products: Vec<Product> }` を所有し、実データを rkyv で archive 化した上で、`RkyvMbt` から正確な
+MoonBit view を生成します。JavaScript target の client は最小の Node `Buffer -> Bytes` loader 経由で
+checked-in `.rkyv` binary を開き、JSON を parse したり product の `Array` を materialize したりせず、
+`Vec<Product>` を lazy に検索します。
+
+生成 package には `ProductInput` と `CatalogInput` も含まれます。`Vec<Product>`、`Vec<String>`、
+`Option<u32>` を含むこの schema について、MoonBit → Rust も型付きで encode できます。
+
+```sh
+just catalog-generate
+moon test --target js examples/catalog/client
+just catalog-js
+# Moon Mug: 1800 cents
+just catalog-roundtrip
+```
+
+`just conformance` に含まれる `check-catalog` が、Rust type・生成 view・archive fixture の同期を検証します。
+`catalog-roundtrip` は MoonBit の `CatalogInput::encode()` で archive を書き、Rust の `rkyv::access` で
+検証して値まで確認します。
+
 ## ベンチマーク
 
 4,096 要素の `Vec<u32>` を native release で測定しました。archive は測定ループ外で一度だけ構築
@@ -235,13 +278,17 @@ layout contract とします。既存の任意 Rust `Archived<T>` の field offs
 
 | 操作 | MoonBit native | Rust rkyv native |
 | --- | ---: | ---: |
-| checked root + 1 要素の lazy read | **9.76 ns** | 2.70 ns |
-| 4K 要素すべての checked eager materialization | 464.57 ns | 259.06 ns |
-| 再利用 `FixedArray` / Rust `Vec` への copy | 192.32 ns | 204.51 ns |
-| 再利用 `MutArrayView` への copy | 1.52 µs | — |
+| checked header + length validation | **6.33 ns** | 3.01 ns |
+| 検証済み lazy view から 1 要素を読む | **6.84 ns** | 1.44 ns |
+| checked root + 1 要素の lazy read | **9.81 ns** | 3.32 ns |
+| 4K 要素すべての checked eager materialization | 478.40 ns | 256.22 ns |
+| 検証済み view から再利用 `FixedArray` / Rust `Vec` への copy | 200.39 ns | 200.15 ns |
+| checked で再利用 `FixedArray` / Rust `Vec` へ copy | **198.22 ns** | 201.11 ns |
+| 再利用 `MutArrayView` への copy | 1.50 µs | — |
 
-Rust 側は public checked API の `rkyv::access` を使っています。MoonBit は `--target native` です。
-runtime、allocation、compiler optimization を含む値なので、導入判断時は対象環境で再計測してください。
+Rust 側は public checked API の `rkyv::access` を使っています。両側とも同じ encode 済み 4K `Vec<u32>`
+archive を受け取り、archive 構築は測定 loop の外です。MoonBit は `--target native` です。runtime、allocation、
+compiler optimization を含む値なので、導入判断時は対象環境で再計測してください。
 
 ```sh
 just bench
@@ -262,6 +309,8 @@ native bulk-copy 経路ではありません。
 
 - Rust `rkyv::to_bytes` の出力を MoonBit が読めること
 - MoonBit `encode_vec_u32` / `encode_string` の出力を Rust `rkyv::access` が受理すること
+- catalog example で nested struct、primitive vector、`Vec<String>`、`Option<Vec<T>>`、fieldless enum の
+  MoonBit → Rust archive を検証すること
 
 任意の `#[derive(Archive)]` struct、tuple、enum、generic collection、一般の `Vec<T>` は公開された
 互換性保証には含みません。
@@ -269,9 +318,13 @@ native bulk-copy 経路ではありません。
 ## 型付き codegen（実験的）
 
 `codegen/rust` の `RkyvMbt` derive は、Rust compiler が確定した `Archived<T>` の size と field offset を
-使って MoonBit typed view を出力します。numeric primitive、`bool`、`String`、`Vec<u32>`、nested な
-derive 済み named struct とその vector を持つ named struct に対応しています。対応する direct field は
-`Option<T>` にもできますが、`Option<Vec<T>>` は未対応です。
+使って MoonBit typed view を出力します。numeric primitive、`bool`、`String`、`Vec<primitive>`、`Vec<String>`、nested な
+derive 済み named struct とその vector、`Option<Vec<T>>` を含む一段の `Option<T>` に対応しています。fieldless enum は
+`RkyvMbtEnum` により strict tag view と type-safe writer を生成します。
+
+`render_moonbit_with_encoder()` は `TypeInput::new` と `TypeInput::encode` も生成します。書き込み対象は
+対応する全 struct field を書き込めます。writer は field 定義順から layout を再計算せず、Rust compiler が確定した
+field offset と `Archived<T>` size をそのまま使います。
 
 Rust crate は実験的で、crates.io には公開していません。対応 format と使用法は
 [codegen/rust/README.md](codegen/rust/README.md) を参照してください。

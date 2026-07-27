@@ -21,6 +21,25 @@ pub fn UserView::root(bytes : Bytes) -> UserView raise @rkyv.RkyvError {
 }
 
 ///|
+pub fn UserView::validate(bytes : Bytes) -> UserView raise @rkyv.RkyvError {
+  let view = UserView::root(bytes)
+  view.validate_all(256)
+  view
+}
+
+///|
+pub fn UserView::validate_all(
+  self : UserView,
+  remaining_depth : Int,
+) -> Unit raise @rkyv.RkyvError {
+  @rkyv.require_validation_depth(remaining_depth)
+  let _ = self.reader.read_u32(self.offset)
+  let _ = self.reader.read_bool_strict(self.offset + 4)
+  let _ = self.reader.read_string(self.offset + 8)
+  let _ = self.reader.read_vec_u32(self.offset + 16)
+}
+
+///|
 pub fn UserView::id(self : UserView) -> UInt raise @rkyv.RkyvError {
   self.reader.read_u32(self.offset)
 }

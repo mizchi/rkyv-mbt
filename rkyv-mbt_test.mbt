@@ -265,6 +265,42 @@ test "locates Option values in the Rust rkyv conformance fixture" {
 }
 
 ///|
+/// Trusted lazy reads retain rkyv's permissive interpretation, while schema
+/// validation must reject invalid discriminants before exposing an archive to
+/// an untrusted caller.
+test "strict validation rejects invalid bool and Option discriminants" {
+  let bool_reader = @rkyv.Reader::new(Bytes::from_array([b'\x02']))
+  let mut invalid_bool = false
+  try {
+    let _ = bool_reader.read_bool_strict(0)
+    fail("invalid bool was accepted")
+  } catch {
+    @rkyv.RkyvError::InvalidBool(value) => {
+      assert_eq(value, b'\x02')
+      invalid_bool = true
+    }
+    _ => fail("invalid bool produced the wrong error")
+  }
+  assert_true(invalid_bool)
+
+  let option_reader = @rkyv.Reader::new(
+    Bytes::from_array([b'\x02', b'\x00', b'\x00', b'\x00', b'\x00']),
+  )
+  let mut invalid_option = false
+  try {
+    let _ = option_reader.read_option_value_offset_strict(0, 4)
+    fail("invalid Option tag was accepted")
+  } catch {
+    @rkyv.RkyvError::InvalidOptionTag(value) => {
+      assert_eq(value, b'\x02')
+      invalid_option = true
+    }
+    _ => fail("invalid Option tag produced the wrong error")
+  }
+  assert_true(invalid_option)
+}
+
+///|
 /// Exact root archives from Rust rkyv's default format protect byte-level
 /// Rust-to-MoonBit interoperability.
 test "matches Rust Vec and String root archives" {

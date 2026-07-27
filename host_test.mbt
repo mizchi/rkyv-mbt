@@ -82,6 +82,210 @@ test "encodes nested host-defined structs" {
 }
 
 ///|
+/// A Rust-derived layout may contain padding that cannot be reconstructed from
+/// declaration order alone. Explicit field offsets must control both writes
+/// and subsequent zero-copy field lookup.
+test "encodes an explicit Rust struct layout with padding" {
+  let schema = Schema::StructLayout(
+    [
+      { name: "active", schema: Schema::Bool },
+      { name: "id", schema: Schema::U32 },
+    ],
+    [0, 8],
+    12,
+  )
+  let archive = schema.encode(
+    Value::Struct([
+      { name: "active", value: Value::Bool(true) },
+      { name: "id", value: Value::U32(0x12345678U) },
+    ]),
+  )
+  assert_eq(
+    archive,
+    Bytes::from_array([
+      b'\x01', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x78',
+      b'\x56', b'\x34', b'\x12',
+    ]),
+  )
+  let root = schema.root(archive)
+  match root.field("id") {
+    None => fail("explicit layout did not expose id")
+    Some(id) => assert_eq(id.read_u32(), Some(0x12345678U))
+  }
+}
+
+///|
+/// Generic vectors and options let generated Rust struct bindings encode the
+/// same recursive shapes that their lazy readers expose.
+test "encodes generic vectors and optional host values" {
+  let schema = Schema::Struct([
+    { name: "labels", schema: Schema::Vec(Schema::String) },
+    { name: "stock", schema: Schema::Option(Schema::U32) },
+  ])
+  let archive = schema.encode(
+    Value::Struct([
+      {
+        name: "labels",
+        value: Value::Vec([Value::String("kitchen"), Value::String("gift")]),
+      },
+      { name: "stock", value: Value::Option(Some(Value::U32(12U))) },
+    ]),
+  )
+  let root = schema.root(archive)
+  match root.field("stock") {
+    None => fail("host view did not find optional stock")
+    Some(stock) =>
+      match stock.option_value() {
+        None => fail("host view did not expose Some stock")
+        Some(value) => assert_eq(value.read_u32(), Some(12U))
+      }
+  }
+}
+
+///|
+/// Every fixed-width primitive uses its rkyv archive representation, so the
+/// host encoder can produce a Rust-readable record without a Rust writer.
+test "encodes every fixed-width primitive through the host schema" {
+  let schema = Schema::Struct([
+    { name: "u8", schema: Schema::U8 },
+    { name: "u16", schema: Schema::U16 },
+    { name: "u32", schema: Schema::U32 },
+    { name: "u64", schema: Schema::U64 },
+    { name: "i8", schema: Schema::I8 },
+    { name: "i16", schema: Schema::I16 },
+    { name: "i32", schema: Schema::I32 },
+    { name: "i64", schema: Schema::I64 },
+    { name: "f32", schema: Schema::F32 },
+    { name: "f64", schema: Schema::F64 },
+  ])
+  let archive = schema.encode(
+    Value::Struct([
+      { name: "u8", value: Value::U8(b'\xab') },
+      { name: "u16", value: Value::U16(0xcdefU) },
+      { name: "u32", value: Value::U32(0x01234567U) },
+      { name: "u64", value: Value::U64(0x0123456789abcdefUL) },
+      { name: "i8", value: Value::I8(-7) },
+      { name: "i16", value: Value::I16(-1000) },
+      { name: "i32", value: Value::I32(-123456789) },
+      { name: "i64", value: Value::I64(-1234567890123456789L) },
+      { name: "f32", value: Value::F32(1.5) },
+      { name: "f64", value: Value::F64(-2.25) },
+    ]),
+  )
+  let root = schema.root(archive)
+  match root.field("u8") {
+    Some(value) => assert_eq(value.read_u8(), Some(b'\xab'))
+    None => fail("u8 field missing")
+  }
+  match root.field("u16") {
+    Some(value) => assert_eq(value.read_u16(), Some(0xcdefU))
+    None => fail("u16 field missing")
+  }
+  match root.field("u32") {
+    Some(value) => assert_eq(value.read_u32(), Some(0x01234567U))
+    None => fail("u32 field missing")
+  }
+  match root.field("u64") {
+    Some(value) => assert_eq(value.read_u64(), Some(0x0123456789abcdefUL))
+    None => fail("u64 field missing")
+  }
+  match root.field("i8") {
+    Some(value) => assert_eq(value.read_i8(), Some(-7))
+    None => fail("i8 field missing")
+  }
+  match root.field("i16") {
+    Some(value) => assert_eq(value.read_i16(), Some(-1000))
+    None => fail("i16 field missing")
+  }
+  match root.field("i32") {
+    Some(value) => assert_eq(value.read_i32(), Some(-123456789))
+    None => fail("i32 field missing")
+  }
+  match root.field("i64") {
+    Some(value) => assert_eq(value.read_i64(), Some(-1234567890123456789L))
+    None => fail("i64 field missing")
+  }
+  match root.field("f32") {
+    Some(value) => assert_true(value.read_f32() == Some(1.5))
+    None => fail("f32 field missing")
+  }
+  match root.field("f64") {
+    Some(value) => assert_true(value.read_f64() == Some(-2.25))
+    None => fail("f64 field missing")
+  }
+}
+
+///|
+/// The generic vector writer must retain the nested element schema when it is
+/// wrapped in `Option`, including fixed-width elements that do not need a
+/// dedicated runtime view.
+test "encodes optional vectors of primitive values" {
+  let schema = Schema::Struct([
+    { name: "signed", schema: Schema::Option(Schema::Vec(Schema::I16)) },
+    { name: "numbers", schema: Schema::Vec(Schema::U64) },
+  ])
+  let archive = schema.encode(
+    Value::Struct([
+      {
+        name: "signed",
+        value: Value::Option(Some(Value::Vec([Value::I16(-1), Value::I16(7)]))),
+      },
+      {
+        name: "numbers",
+        value: Value::Vec([Value::U64(1UL), Value::U64(0x0123456789abcdefUL)]),
+      },
+    ]),
+  )
+  let root = schema.root(archive)
+  match root.field("signed") {
+    Some(value) =>
+      match value.option_value() {
+        Some(vector) => assert_eq(vector.read_vec_i16(), Some([-1, 7]))
+        None => fail("optional vector was missing")
+      }
+    None => fail("signed field missing")
+  }
+  match root.field("numbers") {
+    Some(value) =>
+      assert_eq(value.read_vec_u64(), Some([1UL, 0x0123456789abcdefUL]))
+    None => fail("numbers field missing")
+  }
+}
+
+///|
+/// Tagged unions model rkyv's `#[repr(u8)]` archived enum layout explicitly:
+/// a one-byte discriminant and an explicit, compiler-provided payload offset.
+test "encodes and validates an explicit tagged union" {
+  let union = Schema::TaggedUnion(
+    [
+      { name: "Empty", tag: b'\x00', schema: Schema::Struct([]) },
+      { name: "Count", tag: b'\x01', schema: Schema::U32 },
+      { name: "Label", tag: b'\x02', schema: Schema::String },
+    ],
+    0,
+    4,
+    12,
+  )
+  let archive = union.encode(
+    Value::Tagged(b'\x02', Some(Value::String("mint"))),
+  )
+  assert_eq(
+    archive,
+    Bytes::from_array([
+      b'\x02', b'\x00', b'\x00', b'\x00', b'm', b'i', b'n', b't', b'\xff', b'\xff',
+      b'\xff', b'\xff',
+    ]),
+  )
+  let root = union.root(archive)
+  assert_eq(root.read_tag(), Some(b'\x02'))
+  match root.tagged_value() {
+    Some(value) => assert_eq(value.read_string(), Some("mint"))
+    None => fail("tagged payload missing")
+  }
+  union.validate(archive)
+}
+
+///|
 /// Schema values are named so an accidental schema/value order mismatch cannot
 /// silently write a valid archive for the wrong field.
 test "rejects a host value whose field does not match its schema" {

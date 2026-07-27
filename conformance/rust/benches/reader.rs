@@ -15,6 +15,34 @@ fn checked_archived_vec(bytes: &[u8]) -> &ArchivedVec<u32> {
     access::<ArchivedVec<u32>, Error>(bytes).expect("access archived Vec<u32>")
 }
 
+/// Matches MoonBit's `read_vec_u32_length`: validate the archived header and
+/// complete primitive span, then retain only the logical length.
+fn bench_checked_length_validation(criterion: &mut Criterion) {
+    let archive = archive_vec_u32();
+
+    criterion.bench_function("Rust rkyv checked length validation / 4K", |bench| {
+        bench.iter(|| {
+            let archived = checked_archived_vec(black_box(&archive));
+            black_box(archived.as_slice().len())
+        });
+    });
+}
+
+/// Matches MoonBit's `U32VecView::get`: validation and view construction are
+/// outside the loop, while every iteration performs a bounded lazy element
+/// lookup on the retained archived view.
+fn bench_validated_selected_element(criterion: &mut Criterion) {
+    let archive = archive_vec_u32();
+    let archived = checked_archived_vec(&archive);
+
+    criterion.bench_function("Rust rkyv validated lazy selected element / 4K", |bench| {
+        bench.iter(|| {
+            let index = black_box(SELECTED_INDEX);
+            black_box(archived.as_slice().get(index).copied())
+        });
+    });
+}
+
 fn bench_lazy_selected_element(criterion: &mut Criterion) {
     let archive = archive_vec_u32();
 
@@ -69,6 +97,8 @@ fn bench_checked_copy_into_reused_vec(criterion: &mut Criterion) {
 
 criterion_group!(
     reader,
+    bench_checked_length_validation,
+    bench_validated_selected_element,
     bench_lazy_selected_element,
     bench_eager_materialization,
     bench_validated_copy_into_reused_vec,

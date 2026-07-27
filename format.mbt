@@ -27,6 +27,10 @@ pub suberror RkyvError {
   InvalidElementSize(Int)
   DestinationTooSmall(required~ : Int, actual~ : Int)
   InvalidUtf8
+  InvalidBool(Byte)
+  InvalidOptionTag(Byte)
+  InvalidUnionTag(Byte)
+  DepthLimit(Int)
 } derive(Debug, Eq)
 
 ///|

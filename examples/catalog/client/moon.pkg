@@ -1,0 +1,7 @@
+import {
+  "mizchi/rkyv",
+  "mizchi/rkyv/examples/catalog/generated" @catalog,
+  "mizchi/rkyv/examples/catalog/runtime",
+}
+
+supported_targets = "js"

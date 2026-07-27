@@ -1,0 +1,10 @@
+[package]
+name = "rkyv-mbt-catalog-example"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+rkyv = "=0.8.17"
+rkyv-mbt-codegen = { path = "../../../codegen/rust/rkyv-mbt-codegen" }
+rkyv-mbt-derive = { path = "../../../codegen/rust/rkyv-mbt-derive" }

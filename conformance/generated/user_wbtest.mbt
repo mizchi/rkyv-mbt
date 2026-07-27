@@ -27,6 +27,57 @@ test "generated UserView reads a Rust rkyv struct archive" {
 }
 
 ///|
+/// `validate` traverses every generated field and rejects discriminants that
+/// lazy accessors intentionally leave permissive for trusted archives.
+test "generated UserView validates an untrusted Rust archive" {
+  let archive = Bytes::from_array([
+    b'\x07', b'\x00', b'\x00', b'\x00', b'\x0b', b'\x00', b'\x00', b'\x00', b'\x0d',
+    b'\x00', b'\x00', b'\x00', b'\x2a', b'\x00', b'\x00', b'\x00', b'\x01', b'\x00',
+    b'\x00', b'\x00', b'A', b'd', b'a', b'\xff', b'\xff', b'\xff', b'\xff', b'\xff',
+    b'\xe4', b'\xff', b'\xff', b'\xff', b'\x03', b'\x00', b'\x00', b'\x00',
+  ])
+  assert_eq(UserView::validate(archive).name(), "Ada")
+
+  let invalid = Bytes::from_array([
+    b'\x07', b'\x00', b'\x00', b'\x00', b'\x0b', b'\x00', b'\x00', b'\x00', b'\x0d',
+    b'\x00', b'\x00', b'\x00', b'\x2a', b'\x00', b'\x00', b'\x00', b'\x02', b'\x00',
+    b'\x00', b'\x00', b'A', b'd', b'a', b'\xff', b'\xff', b'\xff', b'\xff', b'\xff',
+    b'\xe4', b'\xff', b'\xff', b'\xff', b'\x03', b'\x00', b'\x00', b'\x00',
+  ])
+  let mut rejected = false
+  try {
+    let _ = UserView::validate(invalid)
+    fail("invalid bool tag was accepted by generated validation")
+  } catch {
+    @rkyv.RkyvError::InvalidBool(value) => {
+      assert_eq(value, b'\x02')
+      rejected = true
+    }
+    _ => fail("generated validation returned the wrong error")
+  }
+  assert_true(rejected)
+
+  let invalid_vector = Bytes::from_array([
+    b'\x07', b'\x00', b'\x00', b'\x00', b'\x0b', b'\x00', b'\x00', b'\x00', b'\x0d',
+    b'\x00', b'\x00', b'\x00', b'\x2a', b'\x00', b'\x00', b'\x00', b'\x01', b'\x00',
+    b'\x00', b'\x00', b'A', b'd', b'a', b'\xff', b'\xff', b'\xff', b'\xff', b'\xff',
+    b'\x00', b'\x00', b'\x00', b'\x00', b'\x03', b'\x00', b'\x00', b'\x00',
+  ])
+  let mut vector_rejected = false
+  try {
+    let _ = UserView::validate(invalid_vector)
+    fail("invalid vector pointer was accepted by generated validation")
+  } catch {
+    @rkyv.RkyvError::InvalidCollectionLength(length) => {
+      assert_eq(length, 3)
+      vector_rejected = true
+    }
+    _ => fail("generated vector validation returned the wrong error")
+  }
+  assert_true(vector_rejected)
+}
+
+///|
 test "generated nested views read a Rust rkyv struct archive" {
   let account = AccountView::root(
     Bytes::from_array([

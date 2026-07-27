@@ -23,6 +23,30 @@ pub fn DirectoryView::root(
 }
 
 ///|
+pub fn DirectoryView::validate(
+  bytes : Bytes,
+) -> DirectoryView raise @rkyv.RkyvError {
+  let view = DirectoryView::root(bytes)
+  view.validate_all(256)
+  view
+}
+
+///|
+pub fn DirectoryView::validate_all(
+  self : DirectoryView,
+  remaining_depth : Int,
+) -> Unit raise @rkyv.RkyvError {
+  @rkyv.require_validation_depth(remaining_depth)
+  let values = self.entries()
+  for index in 0..<values.length() {
+    match values.at(index) {
+      None => ()
+      Some(value) => value.validate_all(remaining_depth - 1)
+    }
+  }
+}
+
+///|
 pub fn DirectoryView::entries(
   self : DirectoryView,
 ) -> DirectoryEntriesView raise @rkyv.RkyvError {

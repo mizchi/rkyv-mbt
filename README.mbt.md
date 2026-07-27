@@ -18,9 +18,10 @@ The supported wire-format contract is rkyv **0.8.17** with its default format:
 - aligned archives; and
 - 32-bit relative pointers and archived `usize` values.
 
-The bidirectional compatibility guarantee currently covers root `Vec<u32>` and
-root `String` archives. See [conformance/README.md](conformance/README.md) for
-the executable contract and its limits.
+The executable compatibility contract covers the checked reader primitives,
+host-defined scalar/vector/option/tagged-union schemas, and the generated
+catalog bindings. See [conformance/README.md](conformance/README.md) for the
+exact fixtures and limits.
 
 ## Features
 
@@ -31,11 +32,14 @@ the executable contract and its limits.
 - A bounds-checked, zero-copy `BytesView` for raw archive ranges.
 - A zero-copy `ArchivedVec<u32>` view with lazy access, `Array`/
   `FixedArray` materialization, and caller-owned buffer copies.
-- Default-format encoders for root `Vec<u32>` and `String`.
+- Default-format schema-directed encoders for primitives, strings, vectors,
+  options, structs, and explicit tagged unions.
 - Little- and big-endian primitive readers with 16-, 32-, or 64-bit pointers.
 - Experimental Rust code generation for typed MoonBit views of named structs.
 - Experimental MoonBit-owned schemas for Rust-free default-format encoding and
   schema-directed zero-copy views, including the JavaScript target.
+- Optional `RMBT` v1 envelopes with format flags, payload length, CRC-32, and
+  a caller-provided payload limit for untrusted transport data.
 
 ## Usage
 
@@ -50,10 +54,36 @@ let view = reader.read_vec_u32(archive_bytes.length() - 8) catch {
 }
 ```
 
-All fallible reader and generated-view APIs raise `RkyvError`. Catch it once at
-the archive boundary, then pass validated zero-copy views through the rest of
-the program. The runtime is not a complete replacement for Rust's `bytecheck`
-on untrusted input.
+All fallible reader and generated-view APIs raise `RkyvError`. `View::root` is
+the lazy path for trusted archives. For an untrusted archive generated Rust
+views also provide `View::validate(bytes)`: it traverses every supported field,
+checks pointers, collection spans, UTF-8, canonical bool/`Option`/enum tags, and
+limits recursive traversal to 256 levels before returning the same zero-copy
+view. It is deliberately scoped to the generated supported types and is not a
+drop-in replacement for Rust `bytecheck` on arbitrary rkyv types.
+
+### Transport envelope
+
+For bytes received from a file, network, or cache, wrap the ordinary rkyv
+payload in an optional `RMBT` v1 envelope. It records the selected rkyv format,
+payload length, and CRC-32; `decode_envelope_with_limit` rejects an excessive
+declared payload before copying it. After checking the envelope, pass its
+payload to the generated validator.
+
+```moonbit nocheck
+///|
+let envelope = @rkyv.encode_envelope(archive)
+
+///|
+let decoded = @rkyv.decode_envelope_with_limit(envelope, 16 * 1024 * 1024) catch {
+  error => abort("invalid archive transport: \{error}")
+}
+
+///|
+let view = @catalog.CatalogView::validate(decoded.payload_bytes()) catch {
+  error => abort("invalid rkyv archive: \{error}")
+}
+```
 
 The primary collection APIs are `read_vec_u32`, `read_vec_u32_length`,
 `read_vec_u32_into`, and `U32VecView::copy_into`. They validate first and do
@@ -244,6 +274,32 @@ Field declaration order is the layout contract. It does not infer arbitrary
 Rust `Archived<T>` field offsets; for a schema shared with an existing Rust
 type, verify its bytes against Rust or use the Rust layout codegen path.
 
+## Dogfooding: static product catalog
+
+[`examples/catalog`](examples/catalog) is an end-to-end, production-shaped
+example. A Rust build step owns `Catalog { products: Vec<Product> }`, archives
+real catalog data with rkyv, and uses `RkyvMbt` to generate the exact MoonBit
+views. The JavaScript-target client opens the checked-in `.rkyv` binary through
+a minimal Node `Buffer -> Bytes` loader, then searches the `Vec<Product>`
+lazily without parsing JSON or materializing a product array.
+
+The generated package also contains `ProductInput` and `CatalogInput`. Their
+constructors make the MoonBit-to-Rust path type-safe for this schema, including
+`Vec<Product>`, `Vec<String>`, and `Option<u32>`.
+
+```sh
+just catalog-generate
+moon test --target js examples/catalog/client
+just catalog-js
+# Moon Mug: 1800 cents
+just catalog-roundtrip
+```
+
+`check-catalog`, which is included in `just conformance`, verifies that the
+Rust types, generated views, and archive fixture remain synchronized.
+`catalog-roundtrip` writes a catalog through `CatalogInput::encode()` in
+MoonBit, then validates and inspects it with Rust `rkyv::access`.
+
 ## Benchmarks
 
 Native release results for a 4,096-element `Vec<u32>`. The archive is built
@@ -256,15 +312,19 @@ Environment: arm64, macOS 26.5.2, Moon 0.1.20260713 / moonc 0.10.4, Rust
 
 | Operation | MoonBit native | Rust rkyv native |
 | --- | ---: | ---: |
-| Checked root + selected lazy element | **9.76 ns** | 2.70 ns |
-| Checked eager materialization of all 4K elements | 464.57 ns | 259.06 ns |
-| Copy to a reused `FixedArray` / Rust `Vec` | 192.32 ns | 204.51 ns |
-| Copy to a reused `MutArrayView` | 1.52 µs | — |
+| Checked header + length validation | **6.33 ns** | 3.01 ns |
+| Validated lazy selected element | **6.84 ns** | 1.44 ns |
+| Checked root + selected lazy element | **9.81 ns** | 3.32 ns |
+| Checked eager materialization of all 4K elements | 478.40 ns | 256.22 ns |
+| Copy from a validated view to a reused `FixedArray` / Rust `Vec` | 200.39 ns | 200.15 ns |
+| Checked copy to a reused `FixedArray` / Rust `Vec` | **198.22 ns** | 201.11 ns |
+| Copy to a reused `MutArrayView` | 1.50 µs | — |
 
-The Rust comparison uses `rkyv::access`, its public checked API. MoonBit uses
-`--target native`; target runtimes, allocation strategy, and compiler
-optimization are all included in these numbers. Re-run on the target system
-before making a deployment decision:
+The Rust comparison uses `rkyv::access`, its public checked API. Both sides
+receive the same already-encoded 4K `Vec<u32>` archive; archive construction is
+outside every timed loop. MoonBit uses `--target native`; target runtimes,
+allocation strategy, and compiler optimization are all included in these
+numbers. Re-run on the target system before making a deployment decision:
 
 ```sh
 just bench
@@ -287,6 +347,9 @@ bulk-copy path.
 - MoonBit reads bytes generated by Rust `rkyv::to_bytes`.
 - Rust `rkyv::access` accepts bytes generated by MoonBit `encode_vec_u32` and
   `encode_string`.
+- The catalog example proves generated MoonBit-to-Rust archives for nested
+  structs, primitive vectors, `Vec<String>`, `Option<Vec<T>>`, and fieldless
+  enums.
 
 Arbitrary `#[derive(Archive)]` structs, tuples, enums, generic collections,
 and general `Vec<T>` are outside this published compatibility guarantee.
@@ -295,10 +358,15 @@ and general `Vec<T>` are outside this published compatibility guarantee.
 
 `codegen/rust` contains `RkyvMbt`, a Rust derive that asks the Rust compiler for
 the concrete `Archived<T>` size and field offsets, then renders a typed MoonBit
-view. It currently supports named structs with numeric primitives, `bool`,
-`String`, `Vec<u32>`, nested derive-enabled named structs, and vectors of such
-structs. Supported direct fields may be wrapped in `Option<T>` (but not
-`Option<Vec<T>>`).
+view. It supports named structs with numeric primitives, `bool`, `String`,
+`Vec<primitive>`, `Vec<String>`, nested derive-enabled named structs, their
+vectors, and one-level `Option<T>` including `Option<Vec<T>>`. Fieldless enums
+generate a strict tag view and a type-safe writer through `RkyvMbtEnum`.
+
+`render_moonbit_with_encoder()` additionally generates `TypeInput::new` and
+`TypeInput::encode` for every supported struct field. The generated writer uses
+the Rust compiler's exact field offsets and `Archived<T>` size rather than
+recomputing struct layout from field declaration order.
 
 The Rust crates are experimental and are not published to crates.io. See
 [codegen/rust/README.md](codegen/rust/README.md) for the supported profile and

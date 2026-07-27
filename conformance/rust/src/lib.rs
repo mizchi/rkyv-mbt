@@ -1,5 +1,8 @@
 #[cfg(test)]
-use rkyv::{access, rancor::Error, string::ArchivedString, to_bytes, vec::ArchivedVec};
+use rkyv::{
+    Archive, Serialize, access, rancor::Error, string::ArchivedString, to_bytes, util::AlignedVec,
+    vec::ArchivedVec,
+};
 
 #[cfg(test)]
 const VEC_U32: &[u8] = &[
@@ -15,6 +18,20 @@ const STRING_OUT_OF_LINE: &[u8] = &[
     b'h', b'e', b'l', b'l', b'o', b' ', b'r', b'k', b'y', b'v', 0x00, 0x00, 0x8a, 0x00, 0x00, 0x00,
     0xf4, 0xff, 0xff, 0xff,
 ];
+
+#[cfg(test)]
+const TAGGED_UNION_LABEL: &[u8] = &[
+    0x02, 0x00, 0x00, 0x00, b'm', b'i', b'n', b't', 0xff, 0xff, 0xff, 0xff,
+];
+
+#[cfg(test)]
+#[allow(dead_code)]
+#[derive(Archive, Serialize)]
+enum HostTaggedUnion {
+    Empty,
+    Count(u32),
+    Label(String),
+}
 
 #[test]
 fn rust_default_archives_match_the_moonbit_contract() {
@@ -41,4 +58,20 @@ fn rust_accepts_archives_encoded_by_moonbit() {
     let out_of_line_string = access::<ArchivedString, Error>(STRING_OUT_OF_LINE)
         .expect("accept MoonBit out-of-line String");
     assert_eq!(out_of_line_string.as_str(), "hello rkyv");
+}
+
+#[test]
+fn rust_and_the_explicit_moonbit_tagged_union_have_the_same_layout() {
+    let rust_bytes = to_bytes::<Error>(&HostTaggedUnion::Label("mint".into()))
+        .expect("serialize tagged union");
+    assert_eq!(&*rust_bytes, TAGGED_UNION_LABEL);
+
+    let mut moon_bytes : AlignedVec<16> = AlignedVec::new();
+    moon_bytes.extend_from_slice(TAGGED_UNION_LABEL);
+    let value = access::<ArchivedHostTaggedUnion, Error>(&moon_bytes)
+        .expect("accept MoonBit tagged union");
+    match value {
+        ArchivedHostTaggedUnion::Label(label) => assert_eq!(label.as_str(), "mint"),
+        _ => panic!("MoonBit tag selected the wrong Rust union variant"),
+    }
 }

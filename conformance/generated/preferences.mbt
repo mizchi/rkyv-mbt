@@ -23,6 +23,42 @@ pub fn PreferencesView::root(
 }
 
 ///|
+pub fn PreferencesView::validate(
+  bytes : Bytes,
+) -> PreferencesView raise @rkyv.RkyvError {
+  let view = PreferencesView::root(bytes)
+  view.validate_all(256)
+  view
+}
+
+///|
+pub fn PreferencesView::validate_all(
+  self : PreferencesView,
+  remaining_depth : Int,
+) -> Unit raise @rkyv.RkyvError {
+  @rkyv.require_validation_depth(remaining_depth)
+  match self.reader.read_option_value_offset_strict(self.offset, 4) {
+    None => ()
+    Some(value_offset) => {
+      let _ = self.reader.read_u32(value_offset)
+    }
+  }
+  match self.reader.read_option_value_offset_strict(self.offset + 8, 4) {
+    None => ()
+    Some(value_offset) => {
+      let _ = self.reader.read_string(value_offset)
+    }
+  }
+  match self.reader.read_option_value_offset_strict(self.offset + 20, 4) {
+    None => ()
+    Some(value_offset) => {
+      let value = ProfileView::at(self.reader, value_offset)
+      value.validate_all(remaining_depth - 1)
+    }
+  }
+}
+
+///|
 pub fn PreferencesView::retries(
   self : PreferencesView,
 ) -> UInt? raise @rkyv.RkyvError {

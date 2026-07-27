@@ -1,0 +1,8 @@
+import {
+  "mizchi/rkyv/examples/catalog/generated" @catalog,
+  "mizchi/rkyv/examples/catalog/runtime",
+}
+
+pkgtype(kind: "executable")
+
+supported_targets = "js"
