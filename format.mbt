@@ -25,6 +25,7 @@ pub enum RkyvError {
   LengthOverflow(Int)
   InvalidCollectionLength(Int)
   InvalidElementSize(Int)
+  DestinationTooSmall(required~ : Int, actual~ : Int)
   InvalidUtf8
 } derive(Debug, Eq)
 

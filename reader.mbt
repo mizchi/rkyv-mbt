@@ -376,11 +376,44 @@ pub fn Reader::read_vec_header(
 }
 
 ///|
-/// Reads and validates a default-format `ArchivedVec<u32>` directly as a view.
+/// Reads and validates the length of a default-format `ArchivedVec<u32>`.
 /// The rkyv default profile is little-endian with 32-bit relative pointers and
-/// lengths, so its header is always eight bytes. Returning the view directly
-/// avoids allocating an intermediate `VecHeader`/`Result` pair on the lazy
-/// hot path.
+/// lengths, so its header is always eight bytes. This avoids creating a view
+/// when a caller only needs the validated element count.
+#warnings("-alert_experimental")
+fn Reader::read_default_vec_u32_length(
+  self : Reader,
+  offset : Int,
+) -> Result[Int, RkyvError] {
+  let input_length = self.bytes.length()
+  if offset < 0 || offset > input_length - 8 {
+    let size = 8
+    let length = input_length
+    return Err(RkyvError::OutOfBounds(offset~, size~, length~))
+  }
+  let header = @v128.v128_load64_zero(bytes_as_fixed_array(self.bytes), offset)
+  let relative = @v128.i32x4_extract_lane(header, 0).reinterpret_as_int()
+  let raw_length = @v128.i32x4_extract_lane(header, 1)
+  if raw_length > 0x7fff_ffffU {
+    return Err(RkyvError::LengthOverflow(raw_length.reinterpret_as_int()))
+  }
+  let length = raw_length.reinterpret_as_int()
+  let data_offset = offset + relative
+  if data_offset < 0 || data_offset > input_length {
+    return Err(RkyvError::InvalidRelativePointer(relative))
+  }
+  let available = input_length - data_offset
+  if length > available / 4 {
+    Err(RkyvError::InvalidCollectionLength(length))
+  } else {
+    Ok(length)
+  }
+}
+
+///|
+/// Reads and validates a default-format `ArchivedVec<u32>` directly as a view.
+/// The dedicated path retains the bytes only after the header and full element
+/// span have passed validation.
 #warnings("-alert_experimental")
 fn Reader::read_default_vec_u32(
   self : Reader,
@@ -460,6 +493,24 @@ pub fn Reader::read_vec_u32(
 }
 
 ///|
+/// Validates an `ArchivedVec<u32>` and returns only its element count. Unlike
+/// `read_vec_u32`, this does not create a `U32VecView` or retain the archive.
+/// Use it for header-only consumers; use `read_vec_u32` when reading elements.
+pub fn Reader::read_vec_u32_length(
+  self : Reader,
+  offset : Int,
+) -> Result[Int, RkyvError] {
+  if self.format.endian == Endian::Little && self.format.pointer_width == 32 {
+    self.read_default_vec_u32_length(offset)
+  } else {
+    match self.read_vec_header_with_element_size(offset, 4) {
+      Err(error) => Err(error)
+      Ok(header) => Ok(header.length)
+    }
+  }
+}
+
+///|
 /// Returns the number of elements in the archived vector without decoding it.
 pub fn U32VecView::length(self : U32VecView) -> Int {
   self.length
@@ -499,40 +550,73 @@ pub fn U32VecView::at(
 ///|
 /// Uses a native bulk copy to fill contiguous u32 storage. Native C compilers
 /// lower this fixed-size-width copy to vector instructions when profitable;
-/// the final conversion returns the public growable `Array` representation.
+/// `copy_into` exposes this path to callers that retain fixed-size buffers.
 #cfg(target="native")
-fn U32VecView::materialize_little_endian(self : U32VecView) -> Array[UInt] {
-  let storage : FixedArray[UInt] = FixedArray::make(self.length, 0U)
+fn U32VecView::copy_little_endian_into(
+  self : U32VecView,
+  destination : FixedArray[UInt],
+) -> Unit {
   let source = bytes_as_fixed_array(self.reader.bytes)
-  copy_validated_u32s_native(source, self.data_offset, storage, self.length)
-  Array::from_fixed_array(storage)
+  copy_validated_u32s_native(source, self.data_offset, destination, self.length)
 }
 
 ///|
-/// Other targets retain lane extraction because their `Array[UInt]` backing
-/// representation is not a native contiguous 32-bit byte buffer.
+/// Other targets use v128 lane extraction to fill the caller's fixed buffer.
 #cfg(not(target="native"))
 #warnings("-alert_experimental")
-fn U32VecView::materialize_little_endian(self : U32VecView) -> Array[UInt] {
-  let values : Array[UInt] = Array::make(self.length, 0U)
+fn U32VecView::copy_little_endian_into(
+  self : U32VecView,
+  destination : FixedArray[UInt],
+) -> Unit {
   let bytes = bytes_as_fixed_array(self.reader.bytes)
   let block_count = self.length / 4
   for block in 0..<block_count {
     let index = block * 4
     let lanes = @v128.v128_load(bytes, self.data_offset + index * 4)
-    values.unsafe_set(index, @v128.i32x4_extract_lane(lanes, 0))
-    values.unsafe_set(index + 1, @v128.i32x4_extract_lane(lanes, 1))
-    values.unsafe_set(index + 2, @v128.i32x4_extract_lane(lanes, 2))
-    values.unsafe_set(index + 3, @v128.i32x4_extract_lane(lanes, 3))
+    destination[index] = @v128.i32x4_extract_lane(lanes, 0)
+    destination[index + 1] = @v128.i32x4_extract_lane(lanes, 1)
+    destination[index + 2] = @v128.i32x4_extract_lane(lanes, 2)
+    destination[index + 3] = @v128.i32x4_extract_lane(lanes, 3)
   }
   let tail_start = block_count * 4
   for index in tail_start..<self.length {
-    values.unsafe_set(
-      index,
-      self.reader.read_u32_in_validated_range(self.data_offset + index * 4),
+    destination[index] = self.reader.read_u32_in_validated_range(
+      self.data_offset + index * 4,
     )
   }
-  values
+}
+
+///|
+/// Writes into a destination whose capacity has already been checked.
+fn U32VecView::copy_into_validated(
+  self : U32VecView,
+  destination : FixedArray[UInt],
+) -> Unit {
+  match self.reader.format.endian {
+    Endian::Little => self.copy_little_endian_into(destination)
+    Endian::Big =>
+      for index in 0..<self.length {
+        destination[index] = self.reader.read_u32_in_validated_range(
+          self.data_offset + index * 4,
+        )
+      }
+  }
+}
+
+///|
+/// Copies every element into caller-owned fixed-size storage. The view has
+/// already validated the archived span. A destination that is too short is
+/// left untouched so callers can safely reuse it after an error.
+pub fn U32VecView::copy_into(
+  self : U32VecView,
+  destination : FixedArray[UInt],
+) -> Result[Unit, RkyvError] {
+  let actual = destination.length()
+  if actual < self.length {
+    return Err(RkyvError::DestinationTooSmall(required=self.length, actual~))
+  }
+  self.copy_into_validated(destination)
+  Ok(())
 }
 
 ///|
@@ -540,19 +624,9 @@ fn U32VecView::materialize_little_endian(self : U32VecView) -> Array[UInt] {
 /// span. Unlike the compatibility wrapper, this cannot fail.
 #warnings("-alert_experimental")
 pub fn U32VecView::to_array_fast(self : U32VecView) -> Array[UInt] {
-  match self.reader.format.endian {
-    Endian::Little => self.materialize_little_endian()
-    Endian::Big => {
-      let values : Array[UInt] = Array::make(self.length, 0U)
-      for index in 0..<self.length {
-        values.unsafe_set(
-          index,
-          self.reader.read_u32_in_validated_range(self.data_offset + index * 4),
-        )
-      }
-      values
-    }
-  }
+  let storage : FixedArray[UInt] = FixedArray::make(self.length, 0U)
+  self.copy_into_validated(storage)
+  Array::from_fixed_array(storage)
 }
 
 ///|

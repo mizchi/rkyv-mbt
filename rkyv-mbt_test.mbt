@@ -119,6 +119,32 @@ test "reads an ArchivedVec<u32> lazily and materializes on demand" {
 }
 
 ///|
+/// Header-only consumers can validate the full archived span without retaining
+/// a view of the backing bytes.
+test "validates an ArchivedVec<u32> length without constructing a view" {
+  let valid = @rkyv.Reader::new(
+    Bytes::from_array([
+      b'\x01', b'\x00', b'\x00', b'\x00', b'\x02', b'\x00', b'\x00', b'\x00', b'\x03',
+      b'\x00', b'\x00', b'\x00', b'\xf4', b'\xff', b'\xff', b'\xff', b'\x03', b'\x00',
+      b'\x00', b'\x00',
+    ]),
+  )
+  assert_eq(valid.read_vec_u32_length(12), Ok(3))
+
+  let truncated = @rkyv.Reader::new(
+    Bytes::from_array([
+      b'\x08', b'\x00', b'\x00', b'\x00', b'\x03', b'\x00', b'\x00', b'\x00', b'\x01',
+      b'\x00', b'\x00', b'\x00',
+    ]),
+  )
+  match truncated.read_vec_u32_length(0) {
+    Ok(_) => fail("truncated rkyv Vec<u32> length was accepted")
+    Err(RkyvError::InvalidCollectionLength(length)) => assert_eq(length, 3)
+    Err(_) => fail("truncated rkyv Vec<u32> returned the wrong error")
+  }
+}
+
+///|
 /// The validated view fast path must preserve the reader's selected endian
 /// format while avoiding a second range check for every element.
 test "reads a validated ArchivedVec<u32> with big-endian elements" {
@@ -129,12 +155,16 @@ test "reads a validated ArchivedVec<u32> with big-endian elements" {
     ]),
     @rkyv.Format::big_endian(32, true),
   )
+  assert_eq(reader.read_vec_u32_length(4), Ok(1))
   match reader.read_vec_u32(4) {
     Err(_) => fail("valid big-endian Vec<u32> was rejected")
     Ok(view) => {
       assert_eq(view.get(0), Some(0x12345678U))
       assert_eq(view.get(1), None)
       assert_eq(view.at(0), Ok(Some(0x12345678U)))
+      let destination : FixedArray[UInt] = FixedArray::make(2, 99U)
+      assert_eq(view.copy_into(destination), Ok(()))
+      assert_eq(Array::from_fixed_array(destination), [0x12345678U, 99U])
       assert_eq(view.to_array_fast(), [0x12345678U])
       assert_eq(view.to_array(), Ok([0x12345678U]))
     }
@@ -160,6 +190,39 @@ test "materializes an ArchivedVec<u32> with SIMD blocks and a tail" {
       assert_eq(view.to_array(), Ok([1U, 2U, 3U, 4U, 5U]))
     }
   }
+}
+
+///|
+/// Copying a validated view into caller-owned storage avoids allocating a
+/// second array. The destination may be larger than the archived collection.
+test "copies an ArchivedVec<u32> into caller-owned storage" {
+  let reader = @rkyv.Reader::new(
+    Bytes::from_array([
+      b'\x01', b'\x00', b'\x00', b'\x00', b'\x02', b'\x00', b'\x00', b'\x00', b'\x03',
+      b'\x00', b'\x00', b'\x00', b'\xf4', b'\xff', b'\xff', b'\xff', b'\x03', b'\x00',
+      b'\x00', b'\x00',
+    ]),
+  )
+  let destination : FixedArray[UInt] = FixedArray::make(5, 99U)
+  match reader.read_vec_u32(12) {
+    Err(_) => fail("valid rkyv Vec<u32> was rejected")
+    Ok(view) => assert_eq(view.copy_into(destination), Ok(()))
+  }
+  assert_eq(Array::from_fixed_array(destination), [1U, 2U, 3U, 99U, 99U])
+
+  let too_short : FixedArray[UInt] = FixedArray::make(2, 77U)
+  match reader.read_vec_u32(12) {
+    Err(_) => fail("valid rkyv Vec<u32> was rejected")
+    Ok(view) =>
+      match view.copy_into(too_short) {
+        Err(RkyvError::DestinationTooSmall(required~, actual~)) => {
+          assert_eq(required, 3)
+          assert_eq(actual, 2)
+        }
+        _ => fail("too-short destination returned the wrong result")
+      }
+  }
+  assert_eq(Array::from_fixed_array(too_short), [77U, 77U])
 }
 
 ///|

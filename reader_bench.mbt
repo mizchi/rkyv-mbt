@@ -18,14 +18,14 @@ test "profile Reader construction / 4K" (b : @bench.T) {
 
 ///|
 /// Profiles default-format Vec header parsing and full element-span validation
-/// independently of an individual element load.
-test "profile ArchivedVec<u32> header validation / 4K" (b : @bench.T) {
+/// without constructing a retained lazy view.
+test "profile ArchivedVec<u32> length validation / 4K" (b : @bench.T) {
   let element_count = 4096
   let reader = Reader::new(benchmark_vec_archive(element_count))
   let root_offset = element_count * 4
   b.bench(fn() {
-    let length = match reader.read_vec_u32(root_offset) {
-      Ok(view) => view.length()
+    let length = match reader.read_vec_u32_length(root_offset) {
+      Ok(length) => length
       Err(_) => -1
     }
     b.keep(length)
@@ -79,5 +79,24 @@ test "ArchivedVec<u32> SIMD eager materialization / 4K" (b : @bench.T) {
       Err(error) => Err(error)
     }
     b.keep(values)
+  })
+}
+
+///|
+/// Copies into one buffer that is allocated before the measured section. This
+/// models a decoder that reuses caller-owned storage across many archives.
+test "ArchivedVec<u32> copy into reused FixedArray / 4K" (b : @bench.T) {
+  let element_count = 4096
+  let reader = Reader::new(benchmark_vec_archive(element_count))
+  let view = match reader.read_vec_u32(element_count * 4) {
+    Ok(view) => view
+    Err(_) => abort("benchmark archive must be valid")
+  }
+  let destination : FixedArray[UInt] = FixedArray::make(element_count, 0U)
+  b.bench(fn() {
+    match view.copy_into(destination) {
+      Ok(_) => b.keep(destination[element_count / 2])
+      Err(_) => abort("benchmark destination must fit")
+    }
   })
 }

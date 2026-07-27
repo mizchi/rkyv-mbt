@@ -31,8 +31,8 @@ fn run_header_workload(iterations : Int) -> Int {
   let root_offset = profile_element_count * 4
   let mut checksum = 0
   for _ in 0..<iterations {
-    match reader.read_vec_u32(root_offset) {
-      Ok(view) => checksum = checksum + view.length()
+    match reader.read_vec_u32_length(root_offset) {
+      Ok(length) => checksum = checksum + length
       Err(_) => abort("the profiling archive must be valid")
     }
   }
@@ -71,11 +71,32 @@ fn run_eager_workload(iterations : Int) -> UInt {
 }
 
 ///|
+/// Repeatedly fills one caller-owned buffer. Its allocation stays outside the
+/// profile loop, so the profile isolates decoding and copying work.
+fn run_copy_workload(iterations : Int) -> UInt {
+  let view = profile_view()
+  let destination : FixedArray[UInt] = FixedArray::make(
+    profile_element_count, 0U,
+  )
+  let mut checksum = 0U
+  for _ in 0..<iterations {
+    match view.copy_into(destination) {
+      Ok(_) => checksum = checksum + destination[profile_element_count / 2]
+      Err(_) => abort("the profiling destination must fit")
+    }
+  }
+  checksum
+}
+
+///|
 /// A several-second native workload for `moon run --profile cmd/profile`.
-/// Keep the checksum output: it makes all three measured paths observable.
+/// Keep the checksum output: it makes all four measured paths observable.
 fn main {
   let header = run_header_workload(100000000)
   let lazy_checksum = run_lazy_workload(400000000)
   let eager = run_eager_workload(200000)
-  println("header=\{header}, lazy=\{lazy_checksum}, eager=\{eager}")
+  let copied = run_copy_workload(200000)
+  println(
+    "header=\{header}, lazy=\{lazy_checksum}, eager=\{eager}, copied=\{copied}",
+  )
 }
