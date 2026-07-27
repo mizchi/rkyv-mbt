@@ -1,6 +1,7 @@
 ///|
 /// A view over an rkyv archive. It keeps the caller's `Bytes` buffer and
 /// never copies data while resolving primitive values or relative pointers.
+#valtype
 pub struct Reader {
   bytes : Bytes
   format : Format
@@ -8,6 +9,7 @@ pub struct Reader {
 
 ///|
 /// The two fields that make up an `ArchivedVec<T>` header.
+#valtype
 pub struct VecHeader {
   data_offset : Int
   length : Int
@@ -16,8 +18,10 @@ pub struct VecHeader {
 ///|
 /// A zero-copy typed view of an `ArchivedVec<u32>`. Generated bindings can
 /// retain this view and resolve only the elements requested by their caller.
+#valtype
 pub struct U32VecView {
-  reader : Reader
+  bytes : Bytes
+  format : Format
   data_offset : Int
   length : Int
 }
@@ -58,6 +62,22 @@ pub fn Reader::with_format(bytes : Bytes, format : Format) -> Reader {
 /// Returns the archive's backing bytes without copying them.
 pub fn Reader::bytes(self : Reader) -> Bytes {
   self.bytes
+}
+
+///|
+/// Returns a borrowed, bounds-checked range of the archive without copying.
+/// This is intended for archived byte blobs and integrations that can consume
+/// raw UTF-8 bytes directly. It does not validate a higher-level rkyv layout
+/// or UTF-8; use `read_string` when a decoded, validated `String` is needed.
+pub fn Reader::read_bytes_view(
+  self : Reader,
+  offset : Int,
+  length : Int,
+) -> Result[BytesView, RkyvError] {
+  match self.require(offset, length) {
+    Err(error) => Err(error)
+    Ok(_) => Ok(self.bytes.view(start=offset, end=offset + length))
+  }
 }
 
 ///|
@@ -440,7 +460,7 @@ fn Reader::read_default_vec_u32(
   if length > available / 4 {
     Err(RkyvError::InvalidCollectionLength(length))
   } else {
-    Ok({ reader: self, data_offset, length })
+    Ok({ bytes: self.bytes, format: self.format, data_offset, length })
   }
 }
 
@@ -484,7 +504,8 @@ pub fn Reader::read_vec_u32(
       Err(error) => Err(error)
       Ok(header) =>
         Ok({
-          reader: self,
+          bytes: self.bytes,
+          format: self.format,
           data_offset: header.data_offset,
           length: header.length,
         })
@@ -511,6 +532,26 @@ pub fn Reader::read_vec_u32_length(
 }
 
 ///|
+/// Validates an `ArchivedVec<u32>` and copies it into caller-owned fixed-size
+/// storage. This convenience API does not expose or retain a view; a short
+/// destination is left untouched and returns `DestinationTooSmall`. On
+/// success, it returns the copied element count for making an `ArrayView`.
+pub fn Reader::read_vec_u32_into(
+  self : Reader,
+  offset : Int,
+  destination : FixedArray[UInt],
+) -> Result[Int, RkyvError] {
+  match self.read_vec_u32(offset) {
+    Err(error) => Err(error)
+    Ok(view) =>
+      match view.copy_into(destination) {
+        Err(error) => Err(error)
+        Ok(_) => Ok(view.length())
+      }
+  }
+}
+
+///|
 /// Returns the number of elements in the archived vector without decoding it.
 pub fn U32VecView::length(self : U32VecView) -> Int {
   self.length
@@ -533,7 +574,8 @@ pub fn U32VecView::get(self : U32VecView, index : Int) -> UInt? {
   if index < 0 || index >= self.length {
     None
   } else {
-    Some(self.reader.read_u32_in_validated_range(self.data_offset + index * 4))
+    let reader : Reader = { bytes: self.bytes, format: self.format }
+    Some(reader.read_u32_in_validated_range(self.data_offset + index * 4))
   }
 }
 
@@ -549,14 +591,13 @@ pub fn U32VecView::at(
 
 ///|
 /// Uses a native bulk copy to fill contiguous u32 storage. Native C compilers
-/// lower this fixed-size-width copy to vector instructions when profitable;
-/// `copy_into` exposes this path to callers that retain fixed-size buffers.
+/// lower this fixed-size-width copy to vector instructions when profitable.
 #cfg(target="native")
 fn U32VecView::copy_little_endian_into(
   self : U32VecView,
   destination : FixedArray[UInt],
 ) -> Unit {
-  let source = bytes_as_fixed_array(self.reader.bytes)
+  let source = bytes_as_fixed_array(self.bytes)
   copy_validated_u32s_native(source, self.data_offset, destination, self.length)
 }
 
@@ -568,7 +609,8 @@ fn U32VecView::copy_little_endian_into(
   self : U32VecView,
   destination : FixedArray[UInt],
 ) -> Unit {
-  let bytes = bytes_as_fixed_array(self.reader.bytes)
+  let bytes = bytes_as_fixed_array(self.bytes)
+  let reader : Reader = { bytes: self.bytes, format: self.format }
   let block_count = self.length / 4
   for block in 0..<block_count {
     let index = block * 4
@@ -580,7 +622,7 @@ fn U32VecView::copy_little_endian_into(
   }
   let tail_start = block_count * 4
   for index in tail_start..<self.length {
-    destination[index] = self.reader.read_u32_in_validated_range(
+    destination[index] = reader.read_u32_in_validated_range(
       self.data_offset + index * 4,
     )
   }
@@ -592,14 +634,16 @@ fn U32VecView::copy_into_validated(
   self : U32VecView,
   destination : FixedArray[UInt],
 ) -> Unit {
-  match self.reader.format.endian {
+  match self.format.endian {
     Endian::Little => self.copy_little_endian_into(destination)
-    Endian::Big =>
+    Endian::Big => {
+      let reader : Reader = { bytes: self.bytes, format: self.format }
       for index in 0..<self.length {
-        destination[index] = self.reader.read_u32_in_validated_range(
+        destination[index] = reader.read_u32_in_validated_range(
           self.data_offset + index * 4,
         )
       }
+    }
   }
 }
 
@@ -620,13 +664,77 @@ pub fn U32VecView::copy_into(
 }
 
 ///|
+/// Decodes little-endian words four at a time before storing them through a
+/// mutable view. MoonBit's native C FFI currently cannot accept the aggregate
+/// `MutArrayView` argument, so this remains target-independent.
+#warnings("-alert_experimental")
+fn U32VecView::copy_little_endian_into_mut_view(
+  self : U32VecView,
+  destination : MutArrayView[UInt],
+) -> Unit {
+  let bytes = bytes_as_fixed_array(self.bytes)
+  let reader : Reader = { bytes: self.bytes, format: self.format }
+  let block_count = self.length / 4
+  for block in 0..<block_count {
+    let index = block * 4
+    let lanes = @v128.v128_load(bytes, self.data_offset + index * 4)
+    destination.unsafe_set(index, @v128.i32x4_extract_lane(lanes, 0))
+    destination.unsafe_set(index + 1, @v128.i32x4_extract_lane(lanes, 1))
+    destination.unsafe_set(index + 2, @v128.i32x4_extract_lane(lanes, 2))
+    destination.unsafe_set(index + 3, @v128.i32x4_extract_lane(lanes, 3))
+  }
+  let tail_start = block_count * 4
+  for index in tail_start..<self.length {
+    destination.unsafe_set(
+      index,
+      reader.read_u32_in_validated_range(self.data_offset + index * 4),
+    )
+  }
+}
+
+///|
+/// Copies every element into a caller-owned mutable array window. The window
+/// can start at an arbitrary offset in either an `Array` or `FixedArray`; it
+/// uses v128 loads and scalar stores rather than the native `FixedArray`
+/// bulk-copy FFI.
+pub fn U32VecView::copy_into_mut_view(
+  self : U32VecView,
+  destination : MutArrayView[UInt],
+) -> Result[Unit, RkyvError] {
+  let actual = destination.length()
+  if actual < self.length {
+    return Err(RkyvError::DestinationTooSmall(required=self.length, actual~))
+  }
+  match self.format.endian {
+    Endian::Little => self.copy_little_endian_into_mut_view(destination)
+    Endian::Big => {
+      let reader : Reader = { bytes: self.bytes, format: self.format }
+      for index in 0..<self.length {
+        destination.unsafe_set(
+          index,
+          reader.read_u32_in_validated_range(self.data_offset + index * 4),
+        )
+      }
+    }
+  }
+  Ok(())
+}
+
+///|
+/// Decodes every element after validation into a fixed-size array. This avoids
+/// the extra allocation and copy required to return a growable `Array`.
+pub fn U32VecView::to_fixed_array_fast(self : U32VecView) -> FixedArray[UInt] {
+  let storage : FixedArray[UInt] = FixedArray::make(self.length, 0U)
+  self.copy_into_validated(storage)
+  storage
+}
+
+///|
 /// Decodes every element after `read_vec_u32` has validated the full element
 /// span. Unlike the compatibility wrapper, this cannot fail.
 #warnings("-alert_experimental")
 pub fn U32VecView::to_array_fast(self : U32VecView) -> Array[UInt] {
-  let storage : FixedArray[UInt] = FixedArray::make(self.length, 0U)
-  self.copy_into_validated(storage)
-  Array::from_fixed_array(storage)
+  Array::from_fixed_array(self.to_fixed_array_fast())
 }
 
 ///|
@@ -676,10 +784,10 @@ fn Reader::read_text(
   offset : Int,
   length : Int,
 ) -> Result[String, RkyvError] {
-  match self.require(offset, length) {
+  match self.read_bytes_view(offset, length) {
     Err(error) => Err(error)
-    Ok(_) => {
-      let text = @utf8.decode(self.bytes[offset:offset + length]) catch {
+    Ok(bytes) => {
+      let text = @utf8.decode(bytes) catch {
         _ => return Err(RkyvError::InvalidUtf8)
       }
       Ok(text)

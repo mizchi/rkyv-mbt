@@ -14,7 +14,7 @@ by MoonBit. Consequently, every fixture is checked in both directions.
 
 This is deliberately not a claim that arbitrary `#[derive(Archive)]` types are
 interoperable. Struct, tuple, enum, generic collection, and generated-binding
-layouts remain outside the published `0.1.0` supported surface.
+layouts remain outside the published `0.2.0` supported surface.
 
 ## Generated binding fixture
 
@@ -22,9 +22,9 @@ The development branch also contains an experimental codegen fixture under
 `conformance/generated`. It derives the actual layout of a Rust `User` named
 struct (`u32`, `bool`, `String`, and `Vec<u32>`), renders `UserView` as MoonBit
 source, and checks that the generated view reads a Rust 0.8.17 archive. Numeric
-primitive accessor rendering is tested separately. This expands the next
-release's target surface, but is not part of the published `0.1.0`
-compatibility promise.
+primitive accessor rendering is tested separately. This fixture is a
+development aid only; it does not expand the published `0.2.0` compatibility
+promise.
 
 An additional `Account { id, profile }` fixture verifies generated nested
 views. `AccountView::profile()` validates and returns an inline `ProfileView`

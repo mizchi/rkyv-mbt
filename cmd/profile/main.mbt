@@ -71,6 +71,21 @@ fn run_eager_workload(iterations : Int) -> UInt {
 }
 
 ///|
+/// Repeatedly materializes to fixed-size storage without converting it to a
+/// growable `Array`.
+fn run_fixed_array_workload(iterations : Int) -> UInt {
+  let view = profile_view()
+  let mut checksum = 0U
+  for _ in 0..<iterations {
+    let values = view.to_fixed_array_fast()
+    for value in values {
+      checksum = checksum + value
+    }
+  }
+  checksum
+}
+
+///|
 /// Repeatedly fills one caller-owned buffer. Its allocation stays outside the
 /// profile loop, so the profile isolates decoding and copying work.
 fn run_copy_workload(iterations : Int) -> UInt {
@@ -89,14 +104,36 @@ fn run_copy_workload(iterations : Int) -> UInt {
 }
 
 ///|
+/// Revalidates the archive then copies into one caller-owned buffer. This
+/// models callers that do not retain views between input archives.
+fn run_direct_copy_workload(iterations : Int) -> UInt {
+  let archive = profile_archive()
+  let root_offset = profile_element_count * 4
+  let destination : FixedArray[UInt] = FixedArray::make(
+    profile_element_count, 0U,
+  )
+  let mut checksum = 0U
+  for _ in 0..<iterations {
+    let reader = @rkyv.Reader::new(archive)
+    match reader.read_vec_u32_into(root_offset, destination) {
+      Ok(_) => checksum = checksum + destination[profile_element_count / 2]
+      Err(_) => abort("the profiling destination must fit")
+    }
+  }
+  checksum
+}
+
+///|
 /// A several-second native workload for `moon run --profile cmd/profile`.
-/// Keep the checksum output: it makes all four measured paths observable.
+/// Keep the checksum output: it makes all six measured paths observable.
 fn main {
   let header = run_header_workload(100000000)
   let lazy_checksum = run_lazy_workload(400000000)
   let eager = run_eager_workload(200000)
+  let fixed = run_fixed_array_workload(200000)
   let copied = run_copy_workload(200000)
+  let direct = run_direct_copy_workload(200000)
   println(
-    "header=\{header}, lazy=\{lazy_checksum}, eager=\{eager}, copied=\{copied}",
+    "header=\{header}, lazy=\{lazy_checksum}, eager=\{eager}, fixed=\{fixed}, copied=\{copied}, direct=\{direct}",
   )
 }

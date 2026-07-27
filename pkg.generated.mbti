@@ -36,6 +36,7 @@ pub struct Reader {
 pub fn Reader::bytes(Self) -> Bytes
 pub fn Reader::new(Bytes) -> Self
 pub fn Reader::read_bool(Self, Int) -> Result[Bool, RkyvError]
+pub fn Reader::read_bytes_view(Self, Int, Int) -> Result[BytesView, RkyvError]
 pub fn Reader::read_f32(Self, Int) -> Result[Float, RkyvError]
 pub fn Reader::read_f64(Self, Int) -> Result[Double, RkyvError]
 pub fn Reader::read_i16(Self, Int) -> Result[Int, RkyvError]
@@ -54,6 +55,8 @@ pub fn Reader::read_usize(Self, Int) -> Result[Int, RkyvError]
 pub fn Reader::read_vec_header(Self, Int) -> Result[VecHeader, RkyvError]
 pub fn Reader::read_vec_header_with_element_size(Self, Int, Int) -> Result[VecHeader, RkyvError]
 pub fn Reader::read_vec_u32(Self, Int) -> Result[U32VecView, RkyvError]
+pub fn Reader::read_vec_u32_into(Self, Int, FixedArray[UInt]) -> Result[Int, RkyvError]
+pub fn Reader::read_vec_u32_length(Self, Int) -> Result[Int, RkyvError]
 pub fn Reader::root_offset(Self, Int) -> Result[Int, RkyvError]
 pub fn Reader::validate_range(Self, Int, Int) -> Result[Unit, RkyvError]
 pub fn Reader::with_format(Bytes, Format) -> Self
@@ -66,20 +69,25 @@ pub enum RkyvError {
   LengthOverflow(Int)
   InvalidCollectionLength(Int)
   InvalidElementSize(Int)
+  DestinationTooSmall(required~ : Int, actual~ : Int)
   InvalidUtf8
 } derive(Eq, @debug.Debug)
 
 pub struct U32VecView {
-  reader : Reader
+  bytes : Bytes
+  format : Format
   data_offset : Int
   length : Int
 }
 pub fn U32VecView::at(Self, Int) -> Result[UInt?, RkyvError]
+pub fn U32VecView::copy_into(Self, FixedArray[UInt]) -> Result[Unit, RkyvError]
+pub fn U32VecView::copy_into_mut_view(Self, MutArrayView[UInt]) -> Result[Unit, RkyvError]
 pub fn U32VecView::data_byte_offset(Self) -> Int
 pub fn U32VecView::get(Self, Int) -> UInt?
 pub fn U32VecView::length(Self) -> Int
 pub fn U32VecView::to_array(Self) -> Result[Array[UInt], RkyvError]
 pub fn U32VecView::to_array_fast(Self) -> Array[UInt]
+pub fn U32VecView::to_fixed_array_fast(Self) -> FixedArray[UInt]
 
 pub struct VecHeader {
   data_offset : Int

@@ -37,9 +37,41 @@ fn bench_eager_materialization(criterion: &mut Criterion) {
     });
 }
 
+/// Matches MoonBit's `view.copy_into`: validation and view construction are
+/// outside the measured loop, while the destination Vec is reused.
+fn bench_validated_copy_into_reused_vec(criterion: &mut Criterion) {
+    let archive = archive_vec_u32();
+    let archived = checked_archived_vec(&archive);
+    let mut destination = vec![0_u32; ELEMENT_COUNT];
+
+    criterion.bench_function("Rust rkyv validated copy into reused Vec / 4K", |bench| {
+        bench.iter(|| {
+            destination.copy_from_slice(black_box(archived.as_slice()));
+            black_box(destination[SELECTED_INDEX])
+        });
+    });
+}
+
+/// Matches MoonBit's `Reader::read_vec_u32_into`: checked access occurs on
+/// every iteration, but the destination Vec remains allocated by the caller.
+fn bench_checked_copy_into_reused_vec(criterion: &mut Criterion) {
+    let archive = archive_vec_u32();
+    let mut destination = vec![0_u32; ELEMENT_COUNT];
+
+    criterion.bench_function("Rust rkyv checked copy into reused Vec / 4K", |bench| {
+        bench.iter(|| {
+            let archived = checked_archived_vec(black_box(&archive));
+            destination.copy_from_slice(archived.as_slice());
+            black_box(destination[SELECTED_INDEX])
+        });
+    });
+}
+
 criterion_group!(
     reader,
     bench_lazy_selected_element,
-    bench_eager_materialization
+    bench_eager_materialization,
+    bench_validated_copy_into_reused_vec,
+    bench_checked_copy_into_reused_vec,
 );
 criterion_main!(reader);

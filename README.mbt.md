@@ -12,7 +12,8 @@ Rust 側で `rkyv` が生成したバイト列をコピーせずに参照し、�
 - デフォルトの rkyv 0.8 形式（little-endian / pointer width 32 / aligned）の安全な Reader
 - `u8`〜`u64`、`i8`〜`i64`、`f32`、`f64`、`bool` のビット互換な読み取り
 - rkyv の相対ポインタ、`ArchivedVec<T>` ヘッダ、`ArchivedOption<T>` の値オフセット
-- `ArchivedVec<u32>` の zero-copy lazy view、配列への materialize、再利用バッファへの copy
+- 任意の archive 範囲をコピーせず借用する、bounds-checked な `BytesView`
+- `ArchivedVec<u32>` の zero-copy lazy view、`Array` / `FixedArray` への materialize、再利用バッファへの copy
 - 32-bit shared memory bridge 向けの `ArchivedVec<u32>` 要素先頭 byte offset
 - rkyv 0.8 の inline / out-of-line `ArchivedString`
 - デフォルト形式での root `Vec<u32>` と `String` のエンコード
@@ -37,6 +38,10 @@ let header = reader.read_vec_header(archive_bytes.length() - 8)
 ただし Rust の `bytecheck` と同等の完全な検証器ではありません。信頼できない入力は Rust 側で
 `bytecheck` を実行するか、用途に応じた追加検証を行ってください。
 
+raw byte field をそのまま使う場合は、`reader.read_bytes_view(offset, length)` が
+コピーなしの `BytesView` を返します。これは範囲だけを検証する API で、rkyv の個別レイアウトや
+UTF-8 は検証しません。検証済み `String` が必要なときは `read_string` を使います。
+
 ## 開発
 
 ```sh
@@ -55,15 +60,15 @@ target・最適化によって数値は変わるため、比較時は同じ targ
 
 Rust rkyv との native 比較は `just bench-compare` で実行できます。MoonBit は
 `--target native`、Rust は Criterion の release benchmark を使い、どちらも archive は計測外で
-一度だけ構築します。各反復では安全な root access と中央要素の読み取り、または安全な root access
-と 4,096 要素の owned collection 化を行います。Rust は `rkyv::access`（bytecheck を伴う public safe
-API）を用います。なお、これは言語ランタイム・配列実装・コンパイラ最適化を含む end-to-end 比較であり、
-wasm-gc/JS target の MoonBit 性能や同一 ABI での純粋なアルゴリズム比較を表すものではありません。
+一度だけ構築します。各反復では安全な root access と中央要素の読み取り、owned collection 化、または
+確保済みバッファへの copy を行います。Rust は `rkyv::access`（bytecheck を伴う public safe API）を
+用います。なお、これは言語ランタイム・配列実装・コンパイラ最適化を含む end-to-end 比較であり、wasm-gc/JS
+target の MoonBit 性能や同一 ABI での純粋なアルゴリズム比較を表すものではありません。
 
 現在の Moon CLI には `moon bench --profile` はありません。`just bench-profile` は代わりに
 Reader 生成・Vec header/span 検証・検証済み view の `get` を個別に計測します。`just profile` は
-`moon run --profile --release --target native cmd/profile` を実行し、header 検証・lazy access・eager
-materialization・再利用バッファへの copy を Time Profiler（macOS）で十分長く反復します。通常の利用では
+`moon run --profile --release --target native cmd/profile` を実行し、header 検証・lazy access・`Array` / `FixedArray`
+materialization・view 経由 / 直接の再利用バッファ copy を Time Profiler（macOS）で十分長く反復します。通常の利用では
 `read_vec_u32` の結果を保持し、複数の要素を `get` で読むと header 検証コストを一度にできます。
 
 `Reader::read_vec_u32` が返す `U32VecView` は生成時に全要素の byte span を検証済みです。
@@ -74,10 +79,22 @@ native target の little-endian では最適化済み bulk copy を使い、JS /
 experimental `moonbitlang/core/v128` で 16 bytes（4要素）ずつ読みます。big-endian format は scalar
 fast path を使います。
 
+一度だけ owned collection にするなら、`view.to_fixed_array_fast() -> FixedArray[UInt]` は
+`to_array_fast` の `FixedArray` から growable `Array` への二段目のコピーを省きます。
+
 確保済みのバッファを複数回使う場合は、`FixedArray[UInt]` を渡す
-`view.copy_into(destination) -> Result[Unit, RkyvError]` を使えます。宛先は view の要素数以上で
-ある必要があり、不足時は `DestinationTooSmall` を返して一切書き込みません。native の
-little-endian では `to_array_fast` と同じ bulk copy を使うため、反復ごとの配列確保を避けられます。
+`view.copy_into(destination) -> Result[Unit, RkyvError]` を使えます。view すら保持しない場合は
+`reader.read_vec_u32_into(offset, destination) -> Result[Int, RkyvError]` が header と全要素 span を
+検証してから直接コピーし、コピー要素数を返します。この長さで `destination.view(end=length)` を作れば、
+有効範囲だけの `ArrayView` を追加コピーなしで渡せます。宛先は vector の要素数以上である必要があり、不足時は
+`DestinationTooSmall` を返して一切書き込みません。native の little-endian ではいずれも
+最適化済み bulk copy を使うため、反復ごとの配列確保を避けられます。
+
+既存の growable `Array` の一部分へ書き込む用途では、
+`view.copy_into_mut_view(storage.mut_view(start=..., end=...))` も使えます。これは window の
+境界を保持しますが、MoonBit の native C FFI は `MutArrayView` の aggregate 引数を扱えないため、
+`v128` load と scalar store による移植可能な経路です。throughput が重要なら `FixedArray` と
+`copy_into` / `read_vec_u32_into` を優先してください。
 
 要素数だけが必要な場合は
 `reader.read_vec_u32_length(offset) -> Result[Int, RkyvError]` を使えます。

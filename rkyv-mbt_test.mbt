@@ -165,6 +165,9 @@ test "reads a validated ArchivedVec<u32> with big-endian elements" {
       let destination : FixedArray[UInt] = FixedArray::make(2, 99U)
       assert_eq(view.copy_into(destination), Ok(()))
       assert_eq(Array::from_fixed_array(destination), [0x12345678U, 99U])
+      let direct_destination : FixedArray[UInt] = FixedArray::make(1, 0U)
+      assert_eq(reader.read_vec_u32_into(4, direct_destination), Ok(1))
+      assert_eq(Array::from_fixed_array(direct_destination), [0x12345678U])
       assert_eq(view.to_array_fast(), [0x12345678U])
       assert_eq(view.to_array(), Ok([0x12345678U]))
     }
@@ -186,6 +189,9 @@ test "materializes an ArchivedVec<u32> with SIMD blocks and a tail" {
   match reader.read_vec_u32(20) {
     Err(_) => fail("valid five-element Vec<u32> was rejected")
     Ok(view) => {
+      assert_eq(Array::from_fixed_array(view.to_fixed_array_fast()), [
+        1U, 2U, 3U, 4U, 5U,
+      ])
       assert_eq(view.to_array_fast(), [1U, 2U, 3U, 4U, 5U])
       assert_eq(view.to_array(), Ok([1U, 2U, 3U, 4U, 5U]))
     }
@@ -221,6 +227,98 @@ test "copies an ArchivedVec<u32> into caller-owned storage" {
         }
         _ => fail("too-short destination returned the wrong result")
       }
+  }
+  assert_eq(Array::from_fixed_array(too_short), [77U, 77U])
+}
+
+///|
+/// A mutable subview lets callers reuse a window in a growable buffer without
+/// exposing the rest of that buffer to the decoder.
+test "copies an ArchivedVec<u32> into a MutArrayView window" {
+  let reader = @rkyv.Reader::new(
+    Bytes::from_array([
+      b'\x01', b'\x00', b'\x00', b'\x00', b'\x02', b'\x00', b'\x00', b'\x00', b'\x03',
+      b'\x00', b'\x00', b'\x00', b'\xf4', b'\xff', b'\xff', b'\xff', b'\x03', b'\x00',
+      b'\x00', b'\x00',
+    ]),
+  )
+  let storage : Array[UInt] = [99U, 99U, 99U, 99U, 99U]
+  let destination = storage.mut_view(start=1, end=4)
+  match reader.read_vec_u32(12) {
+    Err(_) => fail("valid rkyv Vec<u32> was rejected")
+    Ok(view) => assert_eq(view.copy_into_mut_view(destination), Ok(()))
+  }
+  assert_eq(storage, [99U, 1U, 2U, 3U, 99U])
+
+  let too_short = storage.mut_view(start=0, end=2)
+  match reader.read_vec_u32(12) {
+    Err(_) => fail("valid rkyv Vec<u32> was rejected")
+    Ok(view) =>
+      match view.copy_into_mut_view(too_short) {
+        Err(RkyvError::DestinationTooSmall(required~, actual~)) => {
+          assert_eq(required, 3)
+          assert_eq(actual, 2)
+        }
+        _ => fail("too-short mutable view returned the wrong result")
+      }
+  }
+  assert_eq(storage, [99U, 1U, 2U, 3U, 99U])
+}
+
+///|
+/// Raw fields and application-specific archived blobs can stay borrowed as a
+/// `BytesView`; only their bounds are checked here.
+test "reads a validated archive byte range as BytesView" {
+  let reader = @rkyv.Reader::new(
+    Bytes::from_array([b'\x00', b'\x01', b'\x02', b'\x03', b'\x04']),
+  )
+  match reader.read_bytes_view(1, 3) {
+    Ok(view) => {
+      assert_eq(view.length(), 3)
+      assert_eq(view[0], b'\x01')
+      assert_eq(view[2], b'\x03')
+    }
+    Err(_) => fail("in-range bytes were rejected")
+  }
+  match reader.read_bytes_view(3, 3) {
+    Err(RkyvError::OutOfBounds(offset~, size~, length~)) => {
+      assert_eq(offset, 3)
+      assert_eq(size, 3)
+      assert_eq(length, 5)
+    }
+    _ => fail("out-of-range bytes returned the wrong result")
+  }
+}
+
+///|
+/// The direct reader API requires no caller-held view or temporary owned array.
+test "copies an ArchivedVec<u32> directly into caller-owned storage" {
+  let reader = @rkyv.Reader::new(
+    Bytes::from_array([
+      b'\x01', b'\x00', b'\x00', b'\x00', b'\x02', b'\x00', b'\x00', b'\x00', b'\x03',
+      b'\x00', b'\x00', b'\x00', b'\xf4', b'\xff', b'\xff', b'\xff', b'\x03', b'\x00',
+      b'\x00', b'\x00',
+    ]),
+  )
+  let destination : FixedArray[UInt] = FixedArray::make(4, 99U)
+  match reader.read_vec_u32_into(12, destination) {
+    Ok(length) => {
+      let values = destination.view(end=length)
+      assert_eq(values.length(), 3)
+      assert_eq(values[0], 1U)
+      assert_eq(values[2], 3U)
+    }
+    Err(_) => fail("valid rkyv Vec<u32> was rejected")
+  }
+  assert_eq(Array::from_fixed_array(destination), [1U, 2U, 3U, 99U])
+
+  let too_short : FixedArray[UInt] = FixedArray::make(2, 77U)
+  match reader.read_vec_u32_into(12, too_short) {
+    Err(RkyvError::DestinationTooSmall(required~, actual~)) => {
+      assert_eq(required, 3)
+      assert_eq(actual, 2)
+    }
+    _ => fail("too-short direct destination returned the wrong result")
   }
   assert_eq(Array::from_fixed_array(too_short), [77U, 77U])
 }
