@@ -150,3 +150,87 @@ test "encodes out-of-line host fields relative to their struct offsets" {
       }
   }
 }
+
+///|
+/// Fixed-width fields and existing vector elements can be updated in the
+/// caller-owned archive buffer without allocating another archive.
+test "mutates host schema fields in place" {
+  let schema = Schema::Struct([
+    { name: "id", schema: Schema::U32 },
+    { name: "active", schema: Schema::Bool },
+    { name: "name", schema: Schema::String },
+    { name: "scores", schema: Schema::VecU32 },
+  ])
+  let archive = schema.encode_mut(
+    Value::Struct([
+      { name: "id", value: Value::U32(42U) },
+      { name: "active", value: Value::Bool(true) },
+      { name: "name", value: Value::String("Ada") },
+      { name: "scores", value: Value::VecU32([7U, 11U, 13U]) },
+    ]),
+  )
+  let root = schema.root_mut(archive.mut_view())
+  match root.field("id") {
+    None => fail("mutable view did not find id")
+    Some(id) => assert_eq(id.set_u32(99U), true)
+  }
+  match root.field("active") {
+    None => fail("mutable view did not find active")
+    Some(active) => assert_eq(active.set_bool(false), true)
+  }
+  match root.field("name") {
+    None => fail("mutable view did not find name")
+    Some(name) => {
+      assert_eq(name.set_string("Eve"), true)
+      assert_eq(name.set_string("longer"), false)
+    }
+  }
+  match root.field("scores") {
+    None => fail("mutable view did not find scores")
+    Some(scores) =>
+      match scores.vec_u32_mut() {
+        None => fail("mutable view did not expose scores")
+        Some(scores) => {
+          assert_eq(scores.length(), 3)
+          assert_eq(scores.set(1, 42U), true)
+          assert_eq(scores.set(3, 99U), false)
+        }
+      }
+  }
+  let updated = schema.root(Bytes::from_array(archive))
+  match updated.field("id") {
+    None => fail("updated view did not find id")
+    Some(id) => assert_eq(id.read_u32(), Some(99U))
+  }
+  match updated.field("active") {
+    None => fail("updated view did not find active")
+    Some(active) => assert_eq(active.read_bool(), Some(false))
+  }
+  match updated.field("name") {
+    None => fail("updated view did not find name")
+    Some(name) => assert_eq(name.read_string(), Some("Eve"))
+  }
+  match updated.field("scores") {
+    None => fail("updated view did not find scores")
+    Some(scores) =>
+      match scores.read_vec_u32() {
+        None => fail("updated view did not expose scores")
+        Some(scores) => assert_eq(scores.to_array(), [7U, 42U, 13U])
+      }
+  }
+}
+
+///|
+/// Long strings use an out-of-line relative pointer, which remains valid when
+/// the replacement preserves the exact UTF-8 byte length.
+test "mutates an out-of-line string without relocating it" {
+  let schema = Schema::String
+  let archive = schema.encode_mut(Value::String("hello rkyv"))
+  let root = schema.root_mut(archive.mut_view())
+  assert_eq(root.set_string("world rkyv"), true)
+  assert_eq(root.set_string("short"), false)
+  assert_eq(
+    schema.root(Bytes::from_array(archive)).read_string(),
+    Some("world rkyv"),
+  )
+}

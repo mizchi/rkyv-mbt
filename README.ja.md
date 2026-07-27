@@ -79,6 +79,9 @@ rkyv の上位 layout や UTF-8 は検証しないため、検証済み `String`
 定義順が archive layout contract です。`Value::Struct` は encode 前に field 数と field 名の両方を
 検証し、schema と異なる場合は `SchemaError` を raise します。
 
+この直接 DSL は field 名と schema を値として扱うため runtime-checked です。caller 側でも field と
+値型を compile-time に固定したい場合は、後述する generated API を使います。
+
 ```moonbit nocheck
 ///|
 let user = @rkyv.Schema::Struct([
@@ -115,6 +118,43 @@ let name = root.field("name")
 let scores = root.field("scores")
 ```
 
+### archive の in-place 更新
+
+archive buffer を caller-owned に保つ場合は `encode_mut` を使います。`root_mut` は root を検証して
+`MutView` を返し、data を再配置しない setter だけを提供します。`set_u32`、`set_bool`、UTF-8 byte 長が
+同じ場合の `set_string`、既存 vector index に対する `vec_u32_mut().set` が使えます。string や vector の
+長さを変える場合は archive 全体を再 encode します。
+
+```moonbit nocheck
+///|
+let archive = user.encode_mut(
+  @rkyv.Value::Struct([
+    { name: "id", value: @rkyv.Value::U32(42U) },
+    { name: "active", value: @rkyv.Value::Bool(true) },
+    { name: "name", value: @rkyv.Value::String("Ada") },
+    { name: "scores", value: @rkyv.Value::VecU32([7U, 11U, 13U]) },
+  ]),
+)
+
+///|
+let root = user.root_mut(archive.mut_view())
+
+///|
+match root.field("id") {
+  Some(id) => ignore(id.set_u32(99U))
+  None => abort("missing id")
+}
+
+///|
+match root.field("scores") {
+  Some(scores) => match scores.vec_u32_mut() {
+    Some(scores) => ignore(scores.set(1, 42U))
+    None => abort("scores is not Vec<u32>")
+  }
+  None => abort("missing scores")
+}
+```
+
 [`examples/host_codegen/user_schema.mbtx`](examples/host_codegen/user_schema.mbtx) が input schema を
 定義し、[`examples/host_codegen/generated/user.mbt`](examples/host_codegen/generated/user.mbt) を出力します。
 
@@ -131,7 +171,10 @@ let user = {
 emit_schema(user)
 ```
 
-JavaScript client は生成済み API だけを import します。
+JavaScript client は生成済み API だけを import します。生成 package は schema 固有の `UserView` と
+`UserMutView` を公開するため、caller は field 名を渡せず、getter / setter の型も source schema から
+固定されます。`encode` は常に caller-owned な `Array[Byte]` を返すため、read-only view を開くときは
+`Bytes::from_array` で明示的に変換します。
 
 ```moonbit nocheck
 ///|
@@ -143,10 +186,30 @@ import {
 let archive = @user.encode(42U, true, "Ada", [7U, 11U, 13U])
 
 ///|
-let root = @user.root(archive)
+let root = @user.UserView::root(Bytes::from_array(archive))
 
 ///|
-let name = root.field("name")
+let name : String = root.name()
+
+///|
+let scores : @rkyv.U32VecView = root.scores()
+```
+
+in-place 更新では、生成された mutable view が valid な setter だけを公開します。
+
+```moonbit nocheck
+///|
+let archive = @user.encode(42U, true, "Ada", [7U, 11U, 13U])
+
+///|
+let writer = @user.UserMutView::root(archive.mut_view())
+
+///|
+writer.set_id(99U)
+writer.set_active(false)
+let patched : Bool = writer.set_name_same_length("Eve")
+let scores = writer.scores_mut()
+ignore(scores.set(1, 42U))
 ```
 
 source schema を変更したら再生成します。`host-js` はまず生成物が source と一致することを確認してから、
@@ -155,7 +218,7 @@ client を JS target だけで実行します。
 ```sh
 just host-schema
 just host-js
-# Ada: 3 scores
+# Eve: 3 scores
 ```
 
 現時点の generator は `u32`、`bool`、`String`、`Vec<u32>` の field に対応します。field の定義順を
