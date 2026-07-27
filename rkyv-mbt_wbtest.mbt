@@ -1,10 +1,8 @@
 // Whitebox tests run within the package scope.
-// Use them to validate internal helpers or invariants.
-// Keep them focused; public behavior belongs in `_test.mbt`.
 
 ///|
-/// The default rkyv profile has a fixed 8-byte `ArchivedVec` header. Its
-/// specialized view reader must retain the generic reader's bounds guarantees.
+/// The specialized default-profile reader has the same validation contract as
+/// the generic public reader while avoiding generic header dispatch.
 test "default Vec<u32> view reader validates the complete element span" {
   let valid = Reader::new(
     Bytes::from_array([
@@ -13,13 +11,9 @@ test "default Vec<u32> view reader validates the complete element span" {
       b'\x00', b'\x00',
     ]),
   )
-  match valid.read_default_vec_u32(12) {
-    Err(_) => fail("valid default Vec<u32> view was rejected")
-    Ok(view) => {
-      assert_eq(view.data_byte_offset(), 0)
-      assert_eq(view.length(), 3)
-    }
-  }
+  let view = valid.read_default_vec_u32(12)
+  assert_eq(view.data_byte_offset(), 0)
+  assert_eq(view.length(), 3)
 
   let truncated = Reader::new(
     Bytes::from_array([
@@ -27,9 +21,16 @@ test "default Vec<u32> view reader validates the complete element span" {
       b'\x00', b'\x00', b'\x00',
     ]),
   )
-  match truncated.read_default_vec_u32(0) {
-    Ok(_) => fail("truncated default Vec<u32> header was accepted")
-    Err(RkyvError::InvalidCollectionLength(length)) => assert_eq(length, 3)
-    Err(_) => fail("truncated default Vec<u32> returned the wrong error")
+  let mut raised = false
+  try {
+    let _ = truncated.read_default_vec_u32(0)
+    fail("truncated default Vec<u32> header was accepted")
+  } catch {
+    RkyvError::InvalidCollectionLength(length) => {
+      assert_eq(length, 3)
+      raised = true
+    }
+    _ => fail("truncated default Vec<u32> returned the wrong error")
   }
+  assert_true(raised)
 }

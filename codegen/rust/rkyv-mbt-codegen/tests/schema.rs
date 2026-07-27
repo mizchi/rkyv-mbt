@@ -110,11 +110,11 @@ fn generates_all_supported_numeric_primitive_accessors() {
         ],
     );
     let source = schema.render_moonbit();
-    assert!(source.contains("Result[Int64, @rkyv.RkyvError]"));
+    assert!(source.contains("Int64 raise @rkyv.RkyvError"));
     assert!(source.contains("self.reader.read_i64(self.offset)"));
-    assert!(source.contains("Result[Float, @rkyv.RkyvError]"));
+    assert!(source.contains("Float raise @rkyv.RkyvError"));
     assert!(source.contains("self.reader.read_f32(self.offset + 8)"));
-    assert!(source.contains("Result[UInt64, @rkyv.RkyvError]"));
+    assert!(source.contains("UInt64 raise @rkyv.RkyvError"));
     assert!(source.contains("self.reader.read_u64(self.offset + 16)"));
 }
 
@@ -191,9 +191,9 @@ fn generates_optional_values_from_the_archived_layout() {
         ],
     );
     let source = schema.render_moonbit();
-    assert!(source.contains("Result[UInt?, @rkyv.RkyvError]"));
+    assert!(source.contains("UInt? raise @rkyv.RkyvError"));
     assert!(source.contains("read_option_value_offset(self.offset, 4)"));
-    assert!(source.contains("Result[ProfileView?, @rkyv.RkyvError]"));
+    assert!(source.contains("ProfileView? raise @rkyv.RkyvError"));
     assert_eq!(
         source,
         include_str!("../../../../conformance/generated/preferences.mbt"),

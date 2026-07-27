@@ -43,33 +43,33 @@ import {
 }
 
 let reader = @rkyv.Reader::new(archive_bytes)
-let result = reader.read_vec_u32(archive_bytes.length() - 8)
-```
-
-The `Result` APIs are the best fit when invalid data is part of ordinary
-control flow. `Reader` reports malformed ranges and rkyv layout errors as
-`RkyvError`; it is not a complete replacement for Rust's `bytecheck` on
-untrusted input.
-
-For the default-format hot path, matching `*_or_raise` APIs avoid making a
-`Result` on a successful read:
-
-```moonbit nocheck
-let view = reader.read_vec_u32_or_raise(root_offset) catch {
+let view = reader.read_vec_u32(archive_bytes.length() - 8) catch {
   error => abort("invalid rkyv archive: \{error}")
 }
+```
+
+All fallible reader and generated-view APIs raise `RkyvError`. Catch it once at
+the archive boundary, then pass validated zero-copy views through the rest of
+the program. The runtime is not a complete replacement for Rust's `bytecheck`
+on untrusted input.
+
+The primary collection APIs are `read_vec_u32`, `read_vec_u32_length`,
+`read_vec_u32_into`, and `U32VecView::copy_into`. They validate first and do
+not allocate an error wrapper on a successful read:
+
+```moonbit nocheck
+///|
+let view = reader.read_vec_u32(root_offset) catch {
+  error => abort("invalid rkyv archive: \{error}")
+}
+
+///|
 let selected = view.get(index)
 ```
 
-Raised APIs preserve the same validation and error payloads:
-
-- `read_vec_u32_or_raise`
-- `read_vec_u32_length_or_raise`
-- `read_vec_u32_into_or_raise`
-- `U32VecView::copy_into_or_raise`
-
-Use `try`/`catch` at an archive boundary. Keep the `Result` forms when callers
-need to recover locally from malformed data.
+Use `try`/`catch` when a caller needs local recovery. `U32VecView::get` and
+`U32VecView::at` return `None` only for an out-of-range logical index; archive
+validation failures always raise `RkyvError`.
 
 `reader.read_bytes_view(offset, length)` returns a zero-copy `BytesView` after
 checking only the requested range. It does not validate a higher-level rkyv
@@ -88,11 +88,10 @@ Environment: arm64, macOS 26.5.2, Moon 0.1.20260713 / moonc 0.10.4, Rust
 
 | Operation | MoonBit native | Rust rkyv native |
 | --- | ---: | ---: |
-| Checked root + selected lazy element (`Result`) | 15.14 ns | 2.73 ns |
-| Checked root + selected lazy element (`raise`) | **9.77 ns** | 2.73 ns |
-| Checked eager materialization of all 4K elements | 466.28 ns | 264.22 ns |
-| Copy to a reused `FixedArray` | 177.27 ns | — |
-| Copy to a reused `MutArrayView` | 1.50 µs | — |
+| Checked root + selected lazy element | **9.76 ns** | 2.70 ns |
+| Checked eager materialization of all 4K elements | 464.57 ns | 259.06 ns |
+| Copy to a reused `FixedArray` / Rust `Vec` | 192.32 ns | 204.51 ns |
+| Copy to a reused `MutArrayView` | 1.52 µs | — |
 
 The Rust comparison uses `rkyv::access`, its public checked API. MoonBit uses
 `--target native`; target runtimes, allocation strategy, and compiler
@@ -107,9 +106,9 @@ just profile
 ```
 
 For throughput-sensitive code, retain a `U32VecView` for repeated `get` calls,
-use `FixedArray` with `copy_into`/`copy_into_or_raise` for reused storage, and
-prefer `to_fixed_array_fast()` to `to_array_fast()` when a growable `Array` is
-not required. `MutArrayView` keeps a convenient subrange but is not the native
+use `FixedArray` with `copy_into` for reused storage, and prefer
+`to_fixed_array_fast()` to `to_array_fast()` when a growable `Array` is not
+required. `MutArrayView` keeps a convenient subrange but is not the native
 bulk-copy path.
 
 ## Rust interoperability

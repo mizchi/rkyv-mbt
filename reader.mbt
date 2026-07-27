@@ -73,11 +73,9 @@ pub fn Reader::read_bytes_view(
   self : Reader,
   offset : Int,
   length : Int,
-) -> Result[BytesView, RkyvError] {
-  match self.require(offset, length) {
-    Err(error) => Err(error)
-    Ok(_) => Ok(self.bytes.view(start=offset, end=offset + length))
-  }
+) -> BytesView raise RkyvError {
+  self.require(offset, length)
+  self.bytes.view(start=offset, end=offset + length)
 }
 
 ///|
@@ -86,12 +84,10 @@ fn Reader::require(
   self : Reader,
   offset : Int,
   size : Int,
-) -> Result[Unit, RkyvError] {
+) -> Unit raise RkyvError {
   let length = self.bytes.length()
   if offset < 0 || size < 0 || offset > length || size > length - offset {
-    Err(RkyvError::OutOfBounds(offset~, size~, length~))
-  } else {
-    Ok(())
+    raise RkyvError::OutOfBounds(offset~, size~, length~)
   }
 }
 
@@ -102,67 +98,57 @@ pub fn Reader::validate_range(
   self : Reader,
   offset : Int,
   size : Int,
-) -> Result[Unit, RkyvError] {
+) -> Unit raise RkyvError {
   self.require(offset, size)
 }
 
 ///|
 /// Gets the byte offset of a root whose archived representation has `size`
 /// bytes. rkyv writes dependencies first and puts the root at the end.
-pub fn Reader::root_offset(self : Reader, size : Int) -> Result[Int, RkyvError] {
-  match self.require(self.bytes.length() - size, size) {
-    Ok(_) => Ok(self.bytes.length() - size)
-    Err(error) => Err(error)
-  }
+pub fn Reader::root_offset(self : Reader, size : Int) -> Int raise RkyvError {
+  let offset = self.bytes.length() - size
+  self.require(offset, size)
+  offset
 }
 
 ///|
 /// Reads an unsigned 8-bit integer.
-pub fn Reader::read_u8(self : Reader, offset : Int) -> Result[Byte, RkyvError] {
-  match self.require(offset, 1) {
-    Ok(_) => Ok(self.bytes[offset])
-    Err(error) => Err(error)
-  }
+pub fn Reader::read_u8(self : Reader, offset : Int) -> Byte raise RkyvError {
+  self.require(offset, 1)
+  self.bytes[offset]
 }
 
 ///|
 /// Reads a signed 8-bit integer.
-pub fn Reader::read_i8(self : Reader, offset : Int) -> Result[Int, RkyvError] {
-  match self.read_u8(offset) {
-    Ok(value) => {
-      let bits = value.to_uint().reinterpret_as_int()
-      Ok(if bits >= 128 { bits - 256 } else { bits })
-    }
-    Err(error) => Err(error)
+pub fn Reader::read_i8(self : Reader, offset : Int) -> Int raise RkyvError {
+  let bits = self.read_u8(offset).to_uint().reinterpret_as_int()
+  if bits >= 128 {
+    bits - 256
+  } else {
+    bits
   }
 }
 
 ///|
 /// Reads an unsigned 16-bit integer using the archive's configured endianness.
-pub fn Reader::read_u16(self : Reader, offset : Int) -> Result[UInt, RkyvError] {
-  match self.require(offset, 2) {
-    Err(error) => Err(error)
-    Ok(_) => {
-      let first = self.bytes[offset].to_uint()
-      let second = self.bytes[offset + 1].to_uint()
-      let value = match self.format.endian {
-        Endian::Little => first | (second << 8)
-        Endian::Big => (first << 8) | second
-      }
-      Ok(value)
-    }
+pub fn Reader::read_u16(self : Reader, offset : Int) -> UInt raise RkyvError {
+  self.require(offset, 2)
+  let first = self.bytes[offset].to_uint()
+  let second = self.bytes[offset + 1].to_uint()
+  match self.format.endian {
+    Endian::Little => first | (second << 8)
+    Endian::Big => (first << 8) | second
   }
 }
 
 ///|
 /// Reads a signed 16-bit integer.
-pub fn Reader::read_i16(self : Reader, offset : Int) -> Result[Int, RkyvError] {
-  match self.read_u16(offset) {
-    Ok(value) => {
-      let bits = value.reinterpret_as_int()
-      Ok(if bits >= 0x8000 { bits - 0x10000 } else { bits })
-    }
-    Err(error) => Err(error)
+pub fn Reader::read_i16(self : Reader, offset : Int) -> Int raise RkyvError {
+  let bits = self.read_u16(offset).reinterpret_as_int()
+  if bits >= 0x8000 {
+    bits - 0x10000
+  } else {
+    bits
   }
 }
 
@@ -183,146 +169,96 @@ fn Reader::read_u32_in_validated_range(self : Reader, offset : Int) -> UInt {
 
 ///|
 /// Reads an unsigned 32-bit integer using the archive's configured endianness.
-pub fn Reader::read_u32(self : Reader, offset : Int) -> Result[UInt, RkyvError] {
-  match self.require(offset, 4) {
-    Err(error) => Err(error)
-    Ok(_) => Ok(self.read_u32_in_validated_range(offset))
-  }
+pub fn Reader::read_u32(self : Reader, offset : Int) -> UInt raise RkyvError {
+  self.require(offset, 4)
+  self.read_u32_in_validated_range(offset)
 }
 
 ///|
 /// Reads a signed 32-bit integer.
-pub fn Reader::read_i32(self : Reader, offset : Int) -> Result[Int, RkyvError] {
-  match self.read_u32(offset) {
-    Ok(value) => Ok(value.reinterpret_as_int())
-    Err(error) => Err(error)
-  }
+pub fn Reader::read_i32(self : Reader, offset : Int) -> Int raise RkyvError {
+  self.read_u32(offset).reinterpret_as_int()
 }
 
 ///|
 /// Reads an IEEE 754 single-precision float without changing its bit pattern.
-pub fn Reader::read_f32(
-  self : Reader,
-  offset : Int,
-) -> Result[Float, RkyvError] {
-  match self.read_u32(offset) {
-    Ok(value) => Ok(Float::reinterpret_from_uint(value))
-    Err(error) => Err(error)
-  }
+pub fn Reader::read_f32(self : Reader, offset : Int) -> Float raise RkyvError {
+  Float::reinterpret_from_uint(self.read_u32(offset))
 }
 
 ///|
 /// Reads rkyv's one-byte boolean representation.
-pub fn Reader::read_bool(
-  self : Reader,
-  offset : Int,
-) -> Result[Bool, RkyvError] {
-  match self.read_u8(offset) {
-    Ok(value) => Ok(value != b'\x00')
-    Err(error) => Err(error)
-  }
+pub fn Reader::read_bool(self : Reader, offset : Int) -> Bool raise RkyvError {
+  self.read_u8(offset) != b'\x00'
 }
 
 ///|
 /// Reads an unsigned 64-bit integer using the archive's configured endianness.
-pub fn Reader::read_u64(
-  self : Reader,
-  offset : Int,
-) -> Result[UInt64, RkyvError] {
-  match self.require(offset, 8) {
-    Err(error) => Err(error)
-    Ok(_) => {
-      let b0 = self.bytes[offset].to_uint64()
-      let b1 = self.bytes[offset + 1].to_uint64()
-      let b2 = self.bytes[offset + 2].to_uint64()
-      let b3 = self.bytes[offset + 3].to_uint64()
-      let b4 = self.bytes[offset + 4].to_uint64()
-      let b5 = self.bytes[offset + 5].to_uint64()
-      let b6 = self.bytes[offset + 6].to_uint64()
-      let b7 = self.bytes[offset + 7].to_uint64()
-      let value = match self.format.endian {
-        Endian::Little =>
-          b0 |
-          (b1 << 8) |
-          (b2 << 16) |
-          (b3 << 24) |
-          (b4 << 32) |
-          (b5 << 40) |
-          (b6 << 48) |
-          (b7 << 56)
-        Endian::Big =>
-          (b0 << 56) |
-          (b1 << 48) |
-          (b2 << 40) |
-          (b3 << 32) |
-          (b4 << 24) |
-          (b5 << 16) |
-          (b6 << 8) |
-          b7
-      }
-      Ok(value)
-    }
+pub fn Reader::read_u64(self : Reader, offset : Int) -> UInt64 raise RkyvError {
+  self.require(offset, 8)
+  let b0 = self.bytes[offset].to_uint64()
+  let b1 = self.bytes[offset + 1].to_uint64()
+  let b2 = self.bytes[offset + 2].to_uint64()
+  let b3 = self.bytes[offset + 3].to_uint64()
+  let b4 = self.bytes[offset + 4].to_uint64()
+  let b5 = self.bytes[offset + 5].to_uint64()
+  let b6 = self.bytes[offset + 6].to_uint64()
+  let b7 = self.bytes[offset + 7].to_uint64()
+  match self.format.endian {
+    Endian::Little =>
+      b0 |
+      (b1 << 8) |
+      (b2 << 16) |
+      (b3 << 24) |
+      (b4 << 32) |
+      (b5 << 40) |
+      (b6 << 48) |
+      (b7 << 56)
+    Endian::Big =>
+      (b0 << 56) |
+      (b1 << 48) |
+      (b2 << 40) |
+      (b3 << 32) |
+      (b4 << 24) |
+      (b5 << 16) |
+      (b6 << 8) |
+      b7
   }
 }
 
 ///|
 /// Reads a signed 64-bit integer.
-pub fn Reader::read_i64(
-  self : Reader,
-  offset : Int,
-) -> Result[Int64, RkyvError] {
-  match self.read_u64(offset) {
-    Ok(value) => Ok(value.reinterpret_as_int64())
-    Err(error) => Err(error)
-  }
+pub fn Reader::read_i64(self : Reader, offset : Int) -> Int64 raise RkyvError {
+  self.read_u64(offset).reinterpret_as_int64()
 }
 
 ///|
 /// Reads an IEEE 754 double-precision float without changing its bit pattern.
-pub fn Reader::read_f64(
-  self : Reader,
-  offset : Int,
-) -> Result[Double, RkyvError] {
-  match self.read_u64(offset) {
-    Ok(value) => Ok(value.reinterpret_as_double())
-    Err(error) => Err(error)
-  }
+pub fn Reader::read_f64(self : Reader, offset : Int) -> Double raise RkyvError {
+  self.read_u64(offset).reinterpret_as_double()
 }
 
 ///|
 /// Reads rkyv's fixed-width archived `usize`. Offsets larger than MoonBit's
 /// addressable `Int` range are rejected instead of wrapping.
-pub fn Reader::read_usize(
-  self : Reader,
-  offset : Int,
-) -> Result[Int, RkyvError] {
+pub fn Reader::read_usize(self : Reader, offset : Int) -> Int raise RkyvError {
   match self.format.pointer_width {
-    16 =>
-      match self.read_u16(offset) {
-        Ok(value) => Ok(value.reinterpret_as_int())
-        Err(error) => Err(error)
+    16 => self.read_u16(offset).reinterpret_as_int()
+    32 => {
+      let value = self.read_u32(offset)
+      if value > 0x7fff_ffffU {
+        raise RkyvError::LengthOverflow(value.reinterpret_as_int())
       }
-    32 =>
-      match self.read_u32(offset) {
-        Ok(value) =>
-          if value > 0x7fff_ffffU {
-            Err(RkyvError::LengthOverflow(value.reinterpret_as_int()))
-          } else {
-            Ok(value.reinterpret_as_int())
-          }
-        Err(error) => Err(error)
+      value.reinterpret_as_int()
+    }
+    64 => {
+      let value = self.read_u64(offset)
+      if value > 0x7fff_ffffUL {
+        raise RkyvError::LengthOverflow(value.to_int())
       }
-    64 =>
-      match self.read_u64(offset) {
-        Ok(value) =>
-          if value > 0x7fff_ffffUL {
-            Err(RkyvError::LengthOverflow(value.to_int()))
-          } else {
-            Ok(value.to_int())
-          }
-        Err(error) => Err(error)
-      }
-    width => Err(RkyvError::InvalidPointerWidth(width))
+      value.to_int()
+    }
+    width => raise RkyvError::InvalidPointerWidth(width)
   }
 }
 
@@ -331,41 +267,31 @@ pub fn Reader::read_usize(
 pub fn Reader::read_rel_ptr_offset(
   self : Reader,
   offset : Int,
-) -> Result[Int, RkyvError] {
+) -> Int raise RkyvError {
   match self.format.pointer_width {
     16 => self.read_i16(offset)
     32 => self.read_i32(offset)
-    64 =>
-      match self.read_i64(offset) {
-        Ok(value) =>
-          if value < -2147483648L || value > 2147483647L {
-            Err(RkyvError::InvalidRelativePointer(value.to_int()))
-          } else {
-            Ok(value.to_int())
-          }
-        Err(error) => Err(error)
+    64 => {
+      let value = self.read_i64(offset)
+      if value < -2147483648L || value > 2147483647L {
+        raise RkyvError::InvalidRelativePointer(value.to_int())
       }
-    width => Err(RkyvError::InvalidPointerWidth(width))
+      value.to_int()
+    }
+    width => raise RkyvError::InvalidPointerWidth(width)
   }
 }
 
 ///|
 /// Resolves an ordinary rkyv relative pointer. `ArchivedString` is the one
 /// exception: its pointer is relative to the string representation's start.
-pub fn Reader::read_rel_ptr(
-  self : Reader,
-  offset : Int,
-) -> Result[Int, RkyvError] {
-  match self.read_rel_ptr_offset(offset) {
-    Err(error) => Err(error)
-    Ok(relative) => {
-      let target = offset + relative
-      match self.require(target, 0) {
-        Ok(_) => Ok(target)
-        Err(_) => Err(RkyvError::InvalidRelativePointer(relative))
-      }
-    }
+pub fn Reader::read_rel_ptr(self : Reader, offset : Int) -> Int raise RkyvError {
+  let relative = self.read_rel_ptr_offset(offset)
+  let target = offset + relative
+  self.require(target, 0) catch {
+    _ => raise RkyvError::InvalidRelativePointer(relative)
   }
+  target
 }
 
 ///|
@@ -374,25 +300,15 @@ pub fn Reader::read_rel_ptr(
 pub fn Reader::read_vec_header(
   self : Reader,
   offset : Int,
-) -> Result[VecHeader, RkyvError] {
-  match self.format.pointer_bytes() {
-    Err(error) => Err(error)
-    Ok(pointer_bytes) =>
-      match self.read_rel_ptr_offset(offset) {
-        Err(error) => Err(error)
-        Ok(relative) =>
-          match self.read_usize(offset + pointer_bytes) {
-            Err(error) => Err(error)
-            Ok(length) => {
-              let data_offset = offset + relative
-              match self.require(data_offset, 0) {
-                Ok(_) => Ok({ data_offset, length })
-                Err(_) => Err(RkyvError::InvalidRelativePointer(relative))
-              }
-            }
-          }
-      }
+) -> VecHeader raise RkyvError {
+  let pointer_bytes = self.format.pointer_bytes()
+  let relative = self.read_rel_ptr_offset(offset)
+  let length = self.read_usize(offset + pointer_bytes)
+  let data_offset = offset + relative
+  self.require(data_offset, 0) catch {
+    _ => raise RkyvError::InvalidRelativePointer(relative)
   }
+  { data_offset, length }
 }
 
 ///|
@@ -404,30 +320,29 @@ pub fn Reader::read_vec_header(
 fn Reader::read_default_vec_u32_length(
   self : Reader,
   offset : Int,
-) -> Result[Int, RkyvError] {
+) -> Int raise RkyvError {
   let input_length = self.bytes.length()
   if offset < 0 || offset > input_length - 8 {
     let size = 8
     let length = input_length
-    return Err(RkyvError::OutOfBounds(offset~, size~, length~))
+    raise RkyvError::OutOfBounds(offset~, size~, length~)
   }
   let header = @v128.v128_load64_zero(bytes_as_fixed_array(self.bytes), offset)
   let relative = @v128.i32x4_extract_lane(header, 0).reinterpret_as_int()
   let raw_length = @v128.i32x4_extract_lane(header, 1)
   if raw_length > 0x7fff_ffffU {
-    return Err(RkyvError::LengthOverflow(raw_length.reinterpret_as_int()))
+    raise RkyvError::LengthOverflow(raw_length.reinterpret_as_int())
   }
   let length = raw_length.reinterpret_as_int()
   let data_offset = offset + relative
   if data_offset < 0 || data_offset > input_length {
-    return Err(RkyvError::InvalidRelativePointer(relative))
+    raise RkyvError::InvalidRelativePointer(relative)
   }
   let available = input_length - data_offset
   if length > available / 4 {
-    Err(RkyvError::InvalidCollectionLength(length))
-  } else {
-    Ok(length)
+    raise RkyvError::InvalidCollectionLength(length)
   }
+  length
 }
 
 ///|
@@ -436,40 +351,6 @@ fn Reader::read_default_vec_u32_length(
 /// span have passed validation.
 #warnings("-alert_experimental")
 fn Reader::read_default_vec_u32(
-  self : Reader,
-  offset : Int,
-) -> Result[U32VecView, RkyvError] {
-  let input_length = self.bytes.length()
-  if offset < 0 || offset > input_length - 8 {
-    let size = 8
-    let length = input_length
-    return Err(RkyvError::OutOfBounds(offset~, size~, length~))
-  }
-  let header = @v128.v128_load64_zero(bytes_as_fixed_array(self.bytes), offset)
-  let relative = @v128.i32x4_extract_lane(header, 0).reinterpret_as_int()
-  let raw_length = @v128.i32x4_extract_lane(header, 1)
-  if raw_length > 0x7fff_ffffU {
-    return Err(RkyvError::LengthOverflow(raw_length.reinterpret_as_int()))
-  }
-  let length = raw_length.reinterpret_as_int()
-  let data_offset = offset + relative
-  if data_offset < 0 || data_offset > input_length {
-    return Err(RkyvError::InvalidRelativePointer(relative))
-  }
-  let available = input_length - data_offset
-  if length > available / 4 {
-    Err(RkyvError::InvalidCollectionLength(length))
-  } else {
-    Ok({ bytes: self.bytes, format: self.format, data_offset, length })
-  }
-}
-
-///|
-/// Reads a default-format `ArchivedVec<u32>` without constructing a `Result`
-/// on the validated path. Invalid archives raise the same `RkyvError` values
-/// returned by `read_default_vec_u32`.
-#warnings("-alert_experimental")
-fn Reader::read_default_vec_u32_or_raise(
   self : Reader,
   offset : Int,
 ) -> U32VecView raise RkyvError {
@@ -505,21 +386,16 @@ pub fn Reader::read_vec_header_with_element_size(
   self : Reader,
   offset : Int,
   element_size : Int,
-) -> Result[VecHeader, RkyvError] {
+) -> VecHeader raise RkyvError {
   if element_size <= 0 {
-    return Err(RkyvError::InvalidElementSize(element_size))
+    raise RkyvError::InvalidElementSize(element_size)
   }
-  match self.read_vec_header(offset) {
-    Err(error) => Err(error)
-    Ok(header) => {
-      let available = self.bytes.length() - header.data_offset
-      if header.length > available / element_size {
-        Err(RkyvError::InvalidCollectionLength(header.length))
-      } else {
-        Ok(header)
-      }
-    }
+  let header = self.read_vec_header(offset)
+  let available = self.bytes.length() - header.data_offset
+  if header.length > available / element_size {
+    raise RkyvError::InvalidCollectionLength(header.length)
   }
+  header
 }
 
 ///|
@@ -529,44 +405,16 @@ pub fn Reader::read_vec_header_with_element_size(
 pub fn Reader::read_vec_u32(
   self : Reader,
   offset : Int,
-) -> Result[U32VecView, RkyvError] {
+) -> U32VecView raise RkyvError {
   if self.format.endian == Endian::Little && self.format.pointer_width == 32 {
     self.read_default_vec_u32(offset)
   } else {
-    match self.read_vec_header_with_element_size(offset, 4) {
-      Err(error) => Err(error)
-      Ok(header) =>
-        Ok({
-          bytes: self.bytes,
-          format: self.format,
-          data_offset: header.data_offset,
-          length: header.length,
-        })
-    }
-  }
-}
-
-///|
-/// Reads an `ArchivedVec<u32>` as a zero-copy typed view and raises
-/// `RkyvError` when validation fails. On rkyv's default format this avoids
-/// constructing a `Result` on the successful path; retain `read_vec_u32`
-/// when errors are part of ordinary control flow.
-pub fn Reader::read_vec_u32_or_raise(
-  self : Reader,
-  offset : Int,
-) -> U32VecView raise RkyvError {
-  if self.format.endian == Endian::Little && self.format.pointer_width == 32 {
-    self.read_default_vec_u32_or_raise(offset)
-  } else {
-    match self.read_vec_header_with_element_size(offset, 4) {
-      Ok(header) =>
-        {
-          bytes: self.bytes,
-          format: self.format,
-          data_offset: header.data_offset,
-          length: header.length,
-        }
-      Err(error) => raise error
+    let header = self.read_vec_header_with_element_size(offset, 4)
+    {
+      bytes: self.bytes,
+      format: self.format,
+      data_offset: header.data_offset,
+      length: header.length,
     }
   }
 }
@@ -578,26 +426,12 @@ pub fn Reader::read_vec_u32_or_raise(
 pub fn Reader::read_vec_u32_length(
   self : Reader,
   offset : Int,
-) -> Result[Int, RkyvError] {
+) -> Int raise RkyvError {
   if self.format.endian == Endian::Little && self.format.pointer_width == 32 {
     self.read_default_vec_u32_length(offset)
   } else {
-    match self.read_vec_header_with_element_size(offset, 4) {
-      Err(error) => Err(error)
-      Ok(header) => Ok(header.length)
-    }
+    self.read_vec_header_with_element_size(offset, 4).length
   }
-}
-
-///|
-/// Validates an `ArchivedVec<u32>` and returns its element count, raising
-/// `RkyvError` on malformed input. This is the raised counterpart of
-/// `read_vec_u32_length` for callers that do not use errors as values.
-pub fn Reader::read_vec_u32_length_or_raise(
-  self : Reader,
-  offset : Int,
-) -> Int raise RkyvError {
-  self.read_vec_u32_or_raise(offset).length()
 }
 
 ///|
@@ -609,28 +443,9 @@ pub fn Reader::read_vec_u32_into(
   self : Reader,
   offset : Int,
   destination : FixedArray[UInt],
-) -> Result[Int, RkyvError] {
-  match self.read_vec_u32(offset) {
-    Err(error) => Err(error)
-    Ok(view) =>
-      match view.copy_into(destination) {
-        Err(error) => Err(error)
-        Ok(_) => Ok(view.length())
-      }
-  }
-}
-
-///|
-/// Validates and copies an `ArchivedVec<u32>` into caller-owned fixed-size
-/// storage, raising `RkyvError` on invalid input or a short destination. The
-/// destination remains unchanged when it is too short.
-pub fn Reader::read_vec_u32_into_or_raise(
-  self : Reader,
-  offset : Int,
-  destination : FixedArray[UInt],
 ) -> Int raise RkyvError {
-  let view = self.read_vec_u32_or_raise(offset)
-  view.copy_into_or_raise(destination)
+  let view = self.read_vec_u32(offset)
+  view.copy_into(destination)
   view.length()
 }
 
@@ -664,12 +479,9 @@ pub fn U32VecView::get(self : U32VecView, index : Int) -> UInt? {
 
 ///|
 /// Resolves one element without copying the rest of the archived vector.
-/// An index outside the vector's logical range returns `Ok(None)`.
-pub fn U32VecView::at(
-  self : U32VecView,
-  index : Int,
-) -> Result[UInt?, RkyvError] {
-  Ok(self.get(index))
+/// An index outside the vector's logical range returns `None`.
+pub fn U32VecView::at(self : U32VecView, index : Int) -> UInt? {
+  self.get(index)
 }
 
 ///|
@@ -737,22 +549,6 @@ fn U32VecView::copy_into_validated(
 pub fn U32VecView::copy_into(
   self : U32VecView,
   destination : FixedArray[UInt],
-) -> Result[Unit, RkyvError] {
-  let actual = destination.length()
-  if actual < self.length {
-    return Err(RkyvError::DestinationTooSmall(required=self.length, actual~))
-  }
-  self.copy_into_validated(destination)
-  Ok(())
-}
-
-///|
-/// Copies a validated view into caller-owned fixed-size storage, raising
-/// `DestinationTooSmall` without modifying the destination when it cannot
-/// contain the full vector.
-pub fn U32VecView::copy_into_or_raise(
-  self : U32VecView,
-  destination : FixedArray[UInt],
 ) -> Unit raise RkyvError {
   let actual = destination.length()
   if actual < self.length {
@@ -798,10 +594,10 @@ fn U32VecView::copy_little_endian_into_mut_view(
 pub fn U32VecView::copy_into_mut_view(
   self : U32VecView,
   destination : MutArrayView[UInt],
-) -> Result[Unit, RkyvError] {
+) -> Unit raise RkyvError {
   let actual = destination.length()
   if actual < self.length {
-    return Err(RkyvError::DestinationTooSmall(required=self.length, actual~))
+    raise RkyvError::DestinationTooSmall(required=self.length, actual~)
   }
   match self.format.endian {
     Endian::Little => self.copy_little_endian_into_mut_view(destination)
@@ -815,7 +611,6 @@ pub fn U32VecView::copy_into_mut_view(
       }
     }
   }
-  Ok(())
 }
 
 ///|
@@ -839,10 +634,8 @@ pub fn U32VecView::to_array_fast(self : U32VecView) -> Array[UInt] {
 /// Decodes every element into a MoonBit array. Keep the `U32VecView` when a
 /// caller only needs selected elements; use this at API boundaries that need
 /// an owned collection.
-pub fn U32VecView::to_array(
-  self : U32VecView,
-) -> Result[Array[UInt], RkyvError] {
-  Ok(self.to_array_fast())
+pub fn U32VecView::to_array(self : U32VecView) -> Array[UInt] {
+  self.to_array_fast()
 }
 
 ///|
@@ -853,25 +646,20 @@ pub fn Reader::read_option_value_offset(
   self : Reader,
   offset : Int,
   value_alignment : Int,
-) -> Result[Int?, RkyvError] {
+) -> Int? raise RkyvError {
   if value_alignment <= 0 {
-    return Err(RkyvError::InvalidAlignment(value_alignment))
+    raise RkyvError::InvalidAlignment(value_alignment)
   }
-  match self.read_u8(offset) {
-    Err(error) => Err(error)
-    Ok(tag) =>
-      if tag == b'\x00' {
-        Ok(None)
-      } else {
-        let after_tag = offset + 1
-        let value_offset = (after_tag + value_alignment - 1) /
-          value_alignment *
-          value_alignment
-        match self.require(value_offset, 0) {
-          Ok(_) => Ok(Some(value_offset))
-          Err(error) => Err(error)
-        }
-      }
+  let tag = self.read_u8(offset)
+  if tag == b'\x00' {
+    None
+  } else {
+    let after_tag = offset + 1
+    let value_offset = (after_tag + value_alignment - 1) /
+      value_alignment *
+      value_alignment
+    self.require(value_offset, 0)
+    Some(value_offset)
   }
 }
 
@@ -881,15 +669,10 @@ fn Reader::read_text(
   self : Reader,
   offset : Int,
   length : Int,
-) -> Result[String, RkyvError] {
-  match self.read_bytes_view(offset, length) {
-    Err(error) => Err(error)
-    Ok(bytes) => {
-      let text = @utf8.decode(bytes) catch {
-        _ => return Err(RkyvError::InvalidUtf8)
-      }
-      Ok(text)
-    }
+) -> String raise RkyvError {
+  let bytes = self.read_bytes_view(offset, length)
+  @utf8.decode(bytes) catch {
+    _ => raise RkyvError::InvalidUtf8
   }
 }
 
@@ -898,28 +681,20 @@ fn Reader::read_text(
 fn Reader::read_out_of_line_string_length(
   self : Reader,
   offset : Int,
-) -> Result[Int, RkyvError] {
+) -> Int raise RkyvError {
   match self.format.pointer_width {
-    16 =>
-      match self.read_u16(offset) {
-        Ok(value) =>
-          Ok(
-            (value & 0x3fU).reinterpret_as_int() +
-            (value >> 8).reinterpret_as_int() * 64,
-          )
-        Err(error) => Err(error)
-      }
-    32 =>
-      match self.read_u32(offset) {
-        Ok(value) =>
-          Ok(
-            (value & 0x3fU).reinterpret_as_int() +
-            (value >> 8).reinterpret_as_int() * 64,
-          )
-        Err(error) => Err(error)
-      }
-    64 => Err(RkyvError::InvalidPointerWidth(64))
-    width => Err(RkyvError::InvalidPointerWidth(width))
+    16 => {
+      let value = self.read_u16(offset)
+      (value & 0x3fU).reinterpret_as_int() +
+      (value >> 8).reinterpret_as_int() * 64
+    }
+    32 => {
+      let value = self.read_u32(offset)
+      (value & 0x3fU).reinterpret_as_int() +
+      (value >> 8).reinterpret_as_int() * 64
+    }
+    64 => raise RkyvError::InvalidPointerWidth(64)
+    width => raise RkyvError::InvalidPointerWidth(width)
   }
 }
 
@@ -928,37 +703,20 @@ fn Reader::read_out_of_line_string_length(
 pub fn Reader::read_string(
   self : Reader,
   offset : Int,
-) -> Result[String, RkyvError] {
-  match self.format.pointer_bytes() {
-    Err(error) => Err(error)
-    Ok(pointer_bytes) => {
-      let inline_capacity = pointer_bytes * 2
-      match self.require(offset, inline_capacity) {
-        Err(error) => Err(error)
-        Ok(_) => {
-          let first = self.bytes[offset].to_int()
-          if (first & 0xc0) != 0x80 {
-            let mut length = 0
-            while length < inline_capacity &&
-                  self.bytes[offset + length] != b'\xff' {
-              length = length + 1
-            }
-            self.read_text(offset, length)
-          } else {
-            match self.read_out_of_line_string_length(offset) {
-              Err(error) => Err(error)
-              Ok(length) =>
-                match self.read_rel_ptr_offset(offset + pointer_bytes) {
-                  Err(error) => Err(error)
-                  Ok(relative) => {
-                    let data_offset = offset + relative
-                    self.read_text(data_offset, length)
-                  }
-                }
-            }
-          }
-        }
-      }
+) -> String raise RkyvError {
+  let pointer_bytes = self.format.pointer_bytes()
+  let inline_capacity = pointer_bytes * 2
+  self.require(offset, inline_capacity)
+  let first = self.bytes[offset].to_int()
+  if (first & 0xc0) != 0x80 {
+    let mut length = 0
+    while length < inline_capacity && self.bytes[offset + length] != b'\xff' {
+      length = length + 1
     }
+    self.read_text(offset, length)
+  } else {
+    let length = self.read_out_of_line_string_length(offset)
+    let relative = self.read_rel_ptr_offset(offset + pointer_bytes)
+    self.read_text(offset + relative, length)
   }
 }

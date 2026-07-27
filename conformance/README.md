@@ -14,7 +14,7 @@ by MoonBit. Consequently, every fixture is checked in both directions.
 
 This is deliberately not a claim that arbitrary `#[derive(Archive)]` types are
 interoperable. Struct, tuple, enum, generic collection, and generated-binding
-layouts remain outside the published `0.2.0` supported surface.
+layouts remain outside the published `0.3.0` supported surface.
 
 ## Generated binding fixture
 
@@ -23,7 +23,7 @@ The development branch also contains an experimental codegen fixture under
 struct (`u32`, `bool`, `String`, and `Vec<u32>`), renders `UserView` as MoonBit
 source, and checks that the generated view reads a Rust 0.8.17 archive. Numeric
 primitive accessor rendering is tested separately. This fixture is a
-development aid only; it does not expand the published `0.2.0` compatibility
+development aid only; it does not expand the published `0.3.0` compatibility
 promise.
 
 An additional `Account { id, profile }` fixture verifies generated nested
@@ -40,7 +40,7 @@ Its Rust fixture contains two archived `Profile` values followed by the rkyv
 vector header. MoonBit validates the complete fixed-size element span before
 returning `DirectoryEntriesView`, then validates and reads only the requested
 element through `ProfileView::at`. Negative and past-the-end indices return
-`Ok(None)`.
+`None`.
 
 Run the complete contract from the repository root:
 

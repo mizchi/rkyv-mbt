@@ -8,30 +8,26 @@ pub struct AccountView {
 pub fn AccountView::at(
   reader : @rkyv.Reader,
   offset : Int,
-) -> Result[AccountView, @rkyv.RkyvError] {
-  match reader.validate_range(offset, 12) {
-    Ok(_) => Ok({ reader, offset })
-    Err(error) => Err(error)
-  }
+) -> AccountView raise @rkyv.RkyvError {
+  reader.validate_range(offset, 12)
+  { reader, offset }
 }
 
 ///|
-pub fn AccountView::root(bytes : Bytes) -> Result[AccountView, @rkyv.RkyvError] {
+pub fn AccountView::root(bytes : Bytes) -> AccountView raise @rkyv.RkyvError {
   let reader = @rkyv.Reader::new(bytes)
-  match reader.root_offset(12) {
-    Ok(offset) => AccountView::at(reader, offset)
-    Err(error) => Err(error)
-  }
+  let offset = reader.root_offset(12)
+  AccountView::at(reader, offset)
 }
 
 ///|
-pub fn AccountView::id(self : AccountView) -> Result[UInt, @rkyv.RkyvError] {
+pub fn AccountView::id(self : AccountView) -> UInt raise @rkyv.RkyvError {
   self.reader.read_u32(self.offset)
 }
 
 ///|
 pub fn AccountView::profile(
   self : AccountView,
-) -> Result[ProfileView, @rkyv.RkyvError] {
+) -> ProfileView raise @rkyv.RkyvError {
   ProfileView::at(self.reader, self.offset + 4)
 }

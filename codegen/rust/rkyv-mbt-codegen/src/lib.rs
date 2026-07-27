@@ -58,40 +58,36 @@ impl StructSchema {
         writeln!(output, "pub fn {view}::at(").unwrap();
         output.push_str("  reader : @rkyv.Reader,\n");
         output.push_str("  offset : Int,\n");
-        writeln!(output, ") -> Result[{view}, @rkyv.RkyvError] {{").unwrap();
+        writeln!(output, ") -> {view} raise @rkyv.RkyvError {{").unwrap();
         writeln!(
             output,
-            "  match reader.validate_range(offset, {}) {{",
+            "  reader.validate_range(offset, {})",
             self.archived_size
         )
         .unwrap();
-        output.push_str("    Ok(_) => Ok({ reader, offset })\n");
-        output.push_str("    Err(error) => Err(error)\n");
-        output.push_str("  }\n");
+        output.push_str("  { reader, offset }\n");
         output.push_str("}\n\n");
         output.push_str("///|\n");
         let root_signature =
-            format!("pub fn {view}::root(bytes : Bytes) -> Result[{view}, @rkyv.RkyvError] {{");
+            format!("pub fn {view}::root(bytes : Bytes) -> {view} raise @rkyv.RkyvError {{");
         // moonfmt keeps the 81-column ProfileView/AccountView forms on one
         // line, but wraps the 85-column DirectoryView form. Keep generated
         // fixtures formatter-stable instead of requiring a formatting pass.
         if root_signature.len() > 82 {
             writeln!(output, "pub fn {view}::root(").unwrap();
             output.push_str("  bytes : Bytes,\n");
-            writeln!(output, ") -> Result[{view}, @rkyv.RkyvError] {{").unwrap();
+            writeln!(output, ") -> {view} raise @rkyv.RkyvError {{").unwrap();
         } else {
             writeln!(output, "{root_signature}").unwrap();
         }
         output.push_str("  let reader = @rkyv.Reader::new(bytes)\n");
         writeln!(
             output,
-            "  match reader.root_offset({}) {{",
+            "  let offset = reader.root_offset({})",
             self.archived_size
         )
         .unwrap();
-        writeln!(output, "    Ok(offset) => {view}::at(reader, offset)").unwrap();
-        output.push_str("    Err(error) => Err(error)\n");
-        output.push_str("  }\n");
+        writeln!(output, "  {view}::at(reader, offset)").unwrap();
         output.push_str("}\n");
 
         for (name, offset, kind) in &self.fields {
@@ -102,14 +98,14 @@ impl StructSchema {
             let moonbit_type = moonbit_field_type(kind, vec_view.as_deref());
             output.push_str("\n///|\n");
             let one_line_signature = format!(
-                "pub fn {view}::{name}(self : {view}) -> Result[{moonbit_type}, @rkyv.RkyvError] {{"
+                "pub fn {view}::{name}(self : {view}) -> {moonbit_type} raise @rkyv.RkyvError {{"
             );
             if matches!(kind, FieldKind::VecU32 | FieldKind::VecStruct(_, _))
                 || one_line_signature.len() > 80
             {
                 writeln!(output, "pub fn {view}::{name}(").unwrap();
                 writeln!(output, "  self : {view},").unwrap();
-                writeln!(output, ") -> Result[{moonbit_type}, @rkyv.RkyvError] {{").unwrap();
+                writeln!(output, ") -> {moonbit_type} raise @rkyv.RkyvError {{").unwrap();
             } else {
                 writeln!(output, "{one_line_signature}").unwrap();
             }
@@ -214,34 +210,26 @@ fn render_read(
                 "{indent}match {reader}.read_option_value_offset({offset}, {alignment}) {{"
             )
             .unwrap();
-            writeln!(output, "{indent}  Err(error) => Err(error)").unwrap();
-            writeln!(output, "{indent}  Ok(None) => Ok(None)").unwrap();
-            writeln!(output, "{indent}  Ok(Some(value_offset)) =>").unwrap();
+            writeln!(output, "{indent}  None => None").unwrap();
             writeln!(
                 output,
-                "{indent}    match {} {{",
+                "{indent}  Some(value_offset) => Some({})",
                 read_expression(inner, reader, "value_offset")
             )
             .unwrap();
-            writeln!(output, "{indent}      Err(error) => Err(error)").unwrap();
-            writeln!(output, "{indent}      Ok(value) => Ok(Some(value))").unwrap();
-            writeln!(output, "{indent}    }}").unwrap();
             writeln!(output, "{indent}}}").unwrap();
         }
         FieldKind::VecStruct(_, element_size) => {
             let _ = vec_view.expect("vector fields always receive a generated view name");
             writeln!(
                 output,
-                "{indent}match {reader}.read_vec_header_with_element_size({offset}, {element_size}) {{"
+                "{indent}let header = {reader}.read_vec_header_with_element_size({offset}, {element_size})"
             )
             .unwrap();
-            writeln!(output, "{indent}  Err(error) => Err(error)").unwrap();
-            writeln!(output, "{indent}  Ok(header) =>").unwrap();
-            writeln!(output, "{indent}    Ok({{").unwrap();
-            writeln!(output, "{indent}      reader: {reader},").unwrap();
-            writeln!(output, "{indent}      data_offset: header.data_offset,").unwrap();
-            writeln!(output, "{indent}      length: header.length,").unwrap();
-            writeln!(output, "{indent}    }})").unwrap();
+            writeln!(output, "{indent}{{").unwrap();
+            writeln!(output, "{indent}  reader: {reader},").unwrap();
+            writeln!(output, "{indent}  data_offset: header.data_offset,").unwrap();
+            writeln!(output, "{indent}  length: header.length,").unwrap();
             writeln!(output, "{indent}}}").unwrap();
         }
         _ => writeln!(output, "{indent}{}", read_expression(kind, reader, offset)).unwrap(),
@@ -263,18 +251,15 @@ fn render_vec_struct_view(output: &mut String, view: &str, element: &str, elemen
     writeln!(output, "pub fn {view}::at(").unwrap();
     writeln!(output, "  self : {view},").unwrap();
     output.push_str("  index : Int,\n");
-    writeln!(output, ") -> Result[{element}View?, @rkyv.RkyvError] {{").unwrap();
+    writeln!(output, ") -> {element}View? raise @rkyv.RkyvError {{").unwrap();
     output.push_str("  if index < 0 || index >= self.length {\n");
-    output.push_str("    Ok(None)\n");
+    output.push_str("    None\n");
     output.push_str("  } else {\n");
     writeln!(
         output,
-        "    match {element}View::at(self.reader, self.data_offset + index * {element_size}) {{"
+        "    Some({element}View::at(self.reader, self.data_offset + index * {element_size}))"
     )
     .unwrap();
-    output.push_str("      Err(error) => Err(error)\n");
-    output.push_str("      Ok(value) => Ok(Some(value))\n");
-    output.push_str("    }\n");
     output.push_str("  }\n");
     output.push_str("}\n");
 }

@@ -38,7 +38,7 @@ pub struct Format {
 } derive(Eq, @debug.Debug)
 pub fn Format::big_endian(Int, Bool) -> Self
 pub fn Format::new(Endian, Int, Bool) -> Self
-pub fn Format::pointer_bytes(Self) -> Result[Int, RkyvError]
+pub fn Format::pointer_bytes(Self) -> Int raise RkyvError
 
 pub struct Reader {
   bytes : Bytes
@@ -46,33 +46,30 @@ pub struct Reader {
 }
 pub fn Reader::bytes(Self) -> Bytes
 pub fn Reader::new(Bytes) -> Self
-pub fn Reader::read_bool(Self, Int) -> Result[Bool, RkyvError]
-pub fn Reader::read_bytes_view(Self, Int, Int) -> Result[BytesView, RkyvError]
-pub fn Reader::read_f32(Self, Int) -> Result[Float, RkyvError]
-pub fn Reader::read_f64(Self, Int) -> Result[Double, RkyvError]
-pub fn Reader::read_i16(Self, Int) -> Result[Int, RkyvError]
-pub fn Reader::read_i32(Self, Int) -> Result[Int, RkyvError]
-pub fn Reader::read_i64(Self, Int) -> Result[Int64, RkyvError]
-pub fn Reader::read_i8(Self, Int) -> Result[Int, RkyvError]
-pub fn Reader::read_option_value_offset(Self, Int, Int) -> Result[Int?, RkyvError]
-pub fn Reader::read_rel_ptr(Self, Int) -> Result[Int, RkyvError]
-pub fn Reader::read_rel_ptr_offset(Self, Int) -> Result[Int, RkyvError]
-pub fn Reader::read_string(Self, Int) -> Result[String, RkyvError]
-pub fn Reader::read_u16(Self, Int) -> Result[UInt, RkyvError]
-pub fn Reader::read_u32(Self, Int) -> Result[UInt, RkyvError]
-pub fn Reader::read_u64(Self, Int) -> Result[UInt64, RkyvError]
-pub fn Reader::read_u8(Self, Int) -> Result[Byte, RkyvError]
-pub fn Reader::read_usize(Self, Int) -> Result[Int, RkyvError]
-pub fn Reader::read_vec_header(Self, Int) -> Result[VecHeader, RkyvError]
-pub fn Reader::read_vec_header_with_element_size(Self, Int, Int) -> Result[VecHeader, RkyvError]
-pub fn Reader::read_vec_u32(Self, Int) -> Result[U32VecView, RkyvError]
-pub fn Reader::read_vec_u32_into(Self, Int, FixedArray[UInt]) -> Result[Int, RkyvError]
-pub fn Reader::read_vec_u32_into_or_raise(Self, Int, FixedArray[UInt]) -> Int raise RkyvError
-pub fn Reader::read_vec_u32_length(Self, Int) -> Result[Int, RkyvError]
-pub fn Reader::read_vec_u32_length_or_raise(Self, Int) -> Int raise RkyvError
-pub fn Reader::read_vec_u32_or_raise(Self, Int) -> U32VecView raise RkyvError
-pub fn Reader::root_offset(Self, Int) -> Result[Int, RkyvError]
-pub fn Reader::validate_range(Self, Int, Int) -> Result[Unit, RkyvError]
+pub fn Reader::read_bool(Self, Int) -> Bool raise RkyvError
+pub fn Reader::read_bytes_view(Self, Int, Int) -> BytesView raise RkyvError
+pub fn Reader::read_f32(Self, Int) -> Float raise RkyvError
+pub fn Reader::read_f64(Self, Int) -> Double raise RkyvError
+pub fn Reader::read_i16(Self, Int) -> Int raise RkyvError
+pub fn Reader::read_i32(Self, Int) -> Int raise RkyvError
+pub fn Reader::read_i64(Self, Int) -> Int64 raise RkyvError
+pub fn Reader::read_i8(Self, Int) -> Int raise RkyvError
+pub fn Reader::read_option_value_offset(Self, Int, Int) -> Int? raise RkyvError
+pub fn Reader::read_rel_ptr(Self, Int) -> Int raise RkyvError
+pub fn Reader::read_rel_ptr_offset(Self, Int) -> Int raise RkyvError
+pub fn Reader::read_string(Self, Int) -> String raise RkyvError
+pub fn Reader::read_u16(Self, Int) -> UInt raise RkyvError
+pub fn Reader::read_u32(Self, Int) -> UInt raise RkyvError
+pub fn Reader::read_u64(Self, Int) -> UInt64 raise RkyvError
+pub fn Reader::read_u8(Self, Int) -> Byte raise RkyvError
+pub fn Reader::read_usize(Self, Int) -> Int raise RkyvError
+pub fn Reader::read_vec_header(Self, Int) -> VecHeader raise RkyvError
+pub fn Reader::read_vec_header_with_element_size(Self, Int, Int) -> VecHeader raise RkyvError
+pub fn Reader::read_vec_u32(Self, Int) -> U32VecView raise RkyvError
+pub fn Reader::read_vec_u32_into(Self, Int, FixedArray[UInt]) -> Int raise RkyvError
+pub fn Reader::read_vec_u32_length(Self, Int) -> Int raise RkyvError
+pub fn Reader::root_offset(Self, Int) -> Int raise RkyvError
+pub fn Reader::validate_range(Self, Int, Int) -> Unit raise RkyvError
 pub fn Reader::with_format(Bytes, Format) -> Self
 
 pub struct U32VecView {
@@ -81,14 +78,13 @@ pub struct U32VecView {
   data_offset : Int
   length : Int
 }
-pub fn U32VecView::at(Self, Int) -> Result[UInt?, RkyvError]
-pub fn U32VecView::copy_into(Self, FixedArray[UInt]) -> Result[Unit, RkyvError]
-pub fn U32VecView::copy_into_mut_view(Self, MutArrayView[UInt]) -> Result[Unit, RkyvError]
-pub fn U32VecView::copy_into_or_raise(Self, FixedArray[UInt]) -> Unit raise RkyvError
+pub fn U32VecView::at(Self, Int) -> UInt?
+pub fn U32VecView::copy_into(Self, FixedArray[UInt]) -> Unit raise RkyvError
+pub fn U32VecView::copy_into_mut_view(Self, MutArrayView[UInt]) -> Unit raise RkyvError
 pub fn U32VecView::data_byte_offset(Self) -> Int
 pub fn U32VecView::get(Self, Int) -> UInt?
 pub fn U32VecView::length(Self) -> Int
-pub fn U32VecView::to_array(Self) -> Result[Array[UInt], RkyvError]
+pub fn U32VecView::to_array(Self) -> Array[UInt]
 pub fn U32VecView::to_array_fast(Self) -> Array[UInt]
 pub fn U32VecView::to_fixed_array_fast(Self) -> FixedArray[UInt]
 

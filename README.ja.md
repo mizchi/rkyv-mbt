@@ -38,31 +38,28 @@ import {
 }
 
 let reader = @rkyv.Reader::new(archive_bytes)
-let result = reader.read_vec_u32(archive_bytes.length() - 8)
+let view = reader.read_vec_u32(archive_bytes.length() - 8) catch {
+  error => abort("invalid rkyv archive: \{error}")
+}
 ```
 
-`Result` API は壊れた入力を通常の制御フローとして扱う場合に向いています。`Reader` は範囲と
-rkyv layout を検証して `RkyvError` を返しますが、信頼できない入力に対する Rust の `bytecheck` を
-完全に置き換えるものではありません。
+失敗しうる Reader と generated view の API はすべて `RkyvError` を raise します。archive 境界で
+一度だけ catch し、検証済みの zero-copy view を以降の処理へ渡してください。信頼できない入力に
+対する Rust の `bytecheck` を完全に置き換えるものではありません。
 
-デフォルト format の高速経路には、正常系で `Result` を生成しない `*_or_raise` API があります。
+collection の主 API は `read_vec_u32`、`read_vec_u32_length`、`read_vec_u32_into`、
+`U32VecView::copy_into` です。正常系では error wrapper を生成せず、先に archive 全体を検証します。
 
 ```moonbit nocheck
-let view = reader.read_vec_u32_or_raise(root_offset) catch {
+let view = reader.read_vec_u32(root_offset) catch {
   error => abort("invalid rkyv archive: \{error}")
 }
 let selected = view.get(index)
 ```
 
-raise 版も `Result` 版と同じ検証と error payload を使います。
-
-- `read_vec_u32_or_raise`
-- `read_vec_u32_length_or_raise`
-- `read_vec_u32_into_or_raise`
-- `U32VecView::copy_into_or_raise`
-
-archive 境界で `try` / `catch` する場合は raise 版、壊れた archive から呼び出し元で局所的に
-回復する場合は `Result` 版を使ってください。
+局所的に回復する必要がある場合も `try` / `catch` を使います。`U32VecView::get` と
+`U32VecView::at` が `None` を返すのは logical index が範囲外のときだけで、archive の検証失敗は常に
+`RkyvError` を raise します。
 
 `reader.read_bytes_view(offset, length)` は範囲だけを検証してコピーなしの `BytesView` を返します。
 rkyv の上位 layout や UTF-8 は検証しないため、検証済み `String` が必要な場合は `read_string` を
@@ -78,11 +75,10 @@ rkyv の上位 layout や UTF-8 は検証しないため、検証済み `String`
 
 | 操作 | MoonBit native | Rust rkyv native |
 | --- | ---: | ---: |
-| checked root + 1 要素の lazy read (`Result`) | 15.14 ns | 2.73 ns |
-| checked root + 1 要素の lazy read (`raise`) | **9.77 ns** | 2.73 ns |
-| 4K 要素すべての checked eager materialization | 466.28 ns | 264.22 ns |
-| 再利用 `FixedArray` への copy | 177.27 ns | — |
-| 再利用 `MutArrayView` への copy | 1.50 µs | — |
+| checked root + 1 要素の lazy read | **9.76 ns** | 2.70 ns |
+| 4K 要素すべての checked eager materialization | 464.57 ns | 259.06 ns |
+| 再利用 `FixedArray` / Rust `Vec` への copy | 192.32 ns | 204.51 ns |
+| 再利用 `MutArrayView` への copy | 1.52 µs | — |
 
 Rust 側は public checked API の `rkyv::access` を使っています。MoonBit は `--target native` です。
 runtime、allocation、compiler optimization を含む値なので、導入判断時は対象環境で再計測してください。
@@ -95,9 +91,9 @@ just profile
 ```
 
 throughput が重要なら、複数の `get` には `U32VecView` を保持し、再利用 buffer には
-`FixedArray` と `copy_into` / `copy_into_or_raise` を使ってください。growable `Array` が不要なら
-`to_array_fast()` より `to_fixed_array_fast()` が二段目の copy を避けられます。`MutArrayView` は
-部分範囲を書けますが native bulk-copy 経路ではありません。
+`FixedArray` と `copy_into` を使ってください。growable `Array` が不要なら `to_array_fast()` より
+`to_fixed_array_fast()` が二段目の copy を避けられます。`MutArrayView` は部分範囲を書けますが
+native bulk-copy 経路ではありません。
 
 ## Rust との相互運用性
 

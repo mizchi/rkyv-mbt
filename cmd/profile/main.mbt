@@ -18,9 +18,8 @@ fn profile_archive() -> Bytes {
 /// Returns a validated view over the profile archive.
 fn profile_view() -> @rkyv.U32VecView {
   let reader = @rkyv.Reader::new(profile_archive())
-  match reader.read_vec_u32(profile_element_count * 4) {
-    Ok(view) => view
-    Err(_) => abort("the profiling archive must be valid")
+  reader.read_vec_u32(profile_element_count * 4) catch {
+    _ => abort("the profiling archive must be valid")
   }
 }
 
@@ -31,10 +30,10 @@ fn run_header_workload(iterations : Int) -> Int {
   let root_offset = profile_element_count * 4
   let mut checksum = 0
   for _ in 0..<iterations {
-    match reader.read_vec_u32_length(root_offset) {
-      Ok(length) => checksum = checksum + length
-      Err(_) => abort("the profiling archive must be valid")
+    let length = reader.read_vec_u32_length(root_offset) catch {
+      _ => abort("the profiling archive must be valid")
     }
+    checksum = checksum + length
   }
   checksum
 }
@@ -95,10 +94,10 @@ fn run_copy_workload(iterations : Int) -> UInt {
   )
   let mut checksum = 0U
   for _ in 0..<iterations {
-    match view.copy_into(destination) {
-      Ok(_) => checksum = checksum + destination[profile_element_count / 2]
-      Err(_) => abort("the profiling destination must fit")
+    view.copy_into(destination) catch {
+      _ => abort("the profiling destination must fit")
     }
+    checksum = checksum + destination[profile_element_count / 2]
   }
   checksum
 }
@@ -115,10 +114,10 @@ fn run_direct_copy_workload(iterations : Int) -> UInt {
   let mut checksum = 0U
   for _ in 0..<iterations {
     let reader = @rkyv.Reader::new(archive)
-    match reader.read_vec_u32_into(root_offset, destination) {
-      Ok(_) => checksum = checksum + destination[profile_element_count / 2]
-      Err(_) => abort("the profiling destination must fit")
+    let _ = reader.read_vec_u32_into(root_offset, destination) catch {
+      _ => abort("the profiling destination must fit")
     }
+    checksum = checksum + destination[profile_element_count / 2]
   }
   checksum
 }

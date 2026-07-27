@@ -8,36 +8,29 @@ pub struct DirectoryView {
 pub fn DirectoryView::at(
   reader : @rkyv.Reader,
   offset : Int,
-) -> Result[DirectoryView, @rkyv.RkyvError] {
-  match reader.validate_range(offset, 8) {
-    Ok(_) => Ok({ reader, offset })
-    Err(error) => Err(error)
-  }
+) -> DirectoryView raise @rkyv.RkyvError {
+  reader.validate_range(offset, 8)
+  { reader, offset }
 }
 
 ///|
 pub fn DirectoryView::root(
   bytes : Bytes,
-) -> Result[DirectoryView, @rkyv.RkyvError] {
+) -> DirectoryView raise @rkyv.RkyvError {
   let reader = @rkyv.Reader::new(bytes)
-  match reader.root_offset(8) {
-    Ok(offset) => DirectoryView::at(reader, offset)
-    Err(error) => Err(error)
-  }
+  let offset = reader.root_offset(8)
+  DirectoryView::at(reader, offset)
 }
 
 ///|
 pub fn DirectoryView::entries(
   self : DirectoryView,
-) -> Result[DirectoryEntriesView, @rkyv.RkyvError] {
-  match self.reader.read_vec_header_with_element_size(self.offset, 8) {
-    Err(error) => Err(error)
-    Ok(header) =>
-      Ok({
-        reader: self.reader,
-        data_offset: header.data_offset,
-        length: header.length,
-      })
+) -> DirectoryEntriesView raise @rkyv.RkyvError {
+  let header = self.reader.read_vec_header_with_element_size(self.offset, 8)
+  {
+    reader: self.reader,
+    data_offset: header.data_offset,
+    length: header.length,
   }
 }
 
@@ -57,13 +50,10 @@ pub fn DirectoryEntriesView::length(self : DirectoryEntriesView) -> Int {
 pub fn DirectoryEntriesView::at(
   self : DirectoryEntriesView,
   index : Int,
-) -> Result[ProfileView?, @rkyv.RkyvError] {
+) -> ProfileView? raise @rkyv.RkyvError {
   if index < 0 || index >= self.length {
-    Ok(None)
+    None
   } else {
-    match ProfileView::at(self.reader, self.data_offset + index * 8) {
-      Err(error) => Err(error)
-      Ok(value) => Ok(Some(value))
-    }
+    Some(ProfileView::at(self.reader, self.data_offset + index * 8))
   }
 }

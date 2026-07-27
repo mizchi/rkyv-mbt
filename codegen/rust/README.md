@@ -88,11 +88,11 @@ fn main() -> std::io::Result<()> {
 
 `Vec<Inner>` uses the same pattern lazily. The generated collection view first
 validates the complete archived element span using Rust's `size_of` for
-`Archived<Inner>`. `at(index)` returns `Ok(None)` for an out-of-bounds index and
+`Archived<Inner>`. `at(index)` returns `None` for an out-of-bounds index and
 otherwise constructs only that `InnerView`; it does not materialize the vector.
 
-Wrapping any supported field in `Option<T>` produces `Result[T?,
-@rkyv.RkyvError]` on the MoonBit side. The derive records the alignment of
+Wrapping any supported field in `Option<T>` produces `T? raise
+@rkyv.RkyvError` on the MoonBit side. The derive records the alignment of
 `<T as Archive>::Archived`, which lets the runtime compute the rkyv
 tag-plus-padding value offset safely.
 

@@ -209,7 +209,7 @@ dependencies = [
 
 [[package]]
 name = "rkyv-mbt-codegen"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "rkyv",
  "rkyv-mbt-derive",
@@ -217,7 +217,7 @@ dependencies = [
 
 [[package]]
 name = "rkyv-mbt-derive"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "proc-macro2",
  "quote",

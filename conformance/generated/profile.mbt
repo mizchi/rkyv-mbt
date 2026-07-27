@@ -8,30 +8,26 @@ pub struct ProfileView {
 pub fn ProfileView::at(
   reader : @rkyv.Reader,
   offset : Int,
-) -> Result[ProfileView, @rkyv.RkyvError] {
-  match reader.validate_range(offset, 8) {
-    Ok(_) => Ok({ reader, offset })
-    Err(error) => Err(error)
-  }
+) -> ProfileView raise @rkyv.RkyvError {
+  reader.validate_range(offset, 8)
+  { reader, offset }
 }
 
 ///|
-pub fn ProfileView::root(bytes : Bytes) -> Result[ProfileView, @rkyv.RkyvError] {
+pub fn ProfileView::root(bytes : Bytes) -> ProfileView raise @rkyv.RkyvError {
   let reader = @rkyv.Reader::new(bytes)
-  match reader.root_offset(8) {
-    Ok(offset) => ProfileView::at(reader, offset)
-    Err(error) => Err(error)
-  }
+  let offset = reader.root_offset(8)
+  ProfileView::at(reader, offset)
 }
 
 ///|
-pub fn ProfileView::age(self : ProfileView) -> Result[UInt, @rkyv.RkyvError] {
+pub fn ProfileView::age(self : ProfileView) -> UInt raise @rkyv.RkyvError {
   self.reader.read_u32(self.offset)
 }
 
 ///|
 pub fn ProfileView::subscribed(
   self : ProfileView,
-) -> Result[Bool, @rkyv.RkyvError] {
+) -> Bool raise @rkyv.RkyvError {
   self.reader.read_bool(self.offset + 4)
 }

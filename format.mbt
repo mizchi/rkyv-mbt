@@ -54,11 +54,11 @@ pub fn Format::big_endian(pointer_width : Int, aligned : Bool) -> Format {
 
 ///|
 /// Returns the size of archived pointers and `usize` values in bytes.
-pub fn Format::pointer_bytes(self : Format) -> Result[Int, RkyvError] {
+pub fn Format::pointer_bytes(self : Format) -> Int raise RkyvError {
   match self.pointer_width {
-    16 => Ok(2)
-    32 => Ok(4)
-    64 => Ok(8)
-    width => Err(RkyvError::InvalidPointerWidth(width))
+    16 => 2
+    32 => 4
+    64 => 8
+    width => raise RkyvError::InvalidPointerWidth(width)
   }
 }
